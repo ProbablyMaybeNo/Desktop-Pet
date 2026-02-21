@@ -10,29 +10,40 @@
         ShowInTaskbar="False"
         ResizeMode="NoResize">
 
-    <Grid>
-        <!--
-            MILESTONE A PLACEHOLDER
-            Replace this Ellipse with a real sprite/image once assets are ready.
-            The background is fully transparent — only the shape is visible.
-        -->
+    <!--
+        PLACEHOLDER PET — purple circle with eyes.
+        Replace with real sprite (Image tag) once assets are ready.
+        Window background is fully transparent; only these shapes render.
+    -->
+    <Grid x:Name="RootGrid">
+        <Grid.ToolTip>
+            <ToolTip>
+                <TextBlock x:Name="NeedsText" FontSize="11" FontFamily="Consolas"/>
+            </ToolTip>
+        </Grid.ToolTip>
+
+        <!-- Body -->
         <Ellipse Width="80" Height="80"
                  Fill="#CC7B5EA6"
                  Stroke="#FF4A2D7A"
                  StrokeThickness="3"
                  HorizontalAlignment="Center"
-                 VerticalAlignment="Center">
-            <Ellipse.ToolTip>Huffle is here!</Ellipse.ToolTip>
-        </Ellipse>
+                 VerticalAlignment="Center"/>
 
-        <!-- Placeholder face dots -->
-        <Canvas>
-            <Ellipse Canvas.Left="38" Canvas.Top="38" Width="8" Height="8" Fill="White"/>
-            <Ellipse Canvas.Left="74" Canvas.Top="38" Width="8" Height="8" Fill="White"/>
-            <Ellipse Canvas.Left="38" Canvas.Top="38" Width="4" Height="4"
-                     Fill="#333" Canvas.Left="40" Canvas.Top="40"/>
-            <Ellipse Canvas.Left="74" Canvas.Top="38" Width="4" Height="4"
-                     Fill="#333" Canvas.Left="76" Canvas.Top="40"/>
+        <!-- Face (120x120 window, 80x80 body centred at 60,60) -->
+        <Canvas IsHitTestVisible="False">
+            <!-- Left eye white -->
+            <Ellipse Canvas.Left="34" Canvas.Top="43" Width="12" Height="12" Fill="White"/>
+            <!-- Right eye white -->
+            <Ellipse Canvas.Left="74" Canvas.Top="43" Width="12" Height="12" Fill="White"/>
+            <!-- Left pupil -->
+            <Ellipse Canvas.Left="38" Canvas.Top="47" Width="6"  Height="6"  Fill="#1A1A2E"/>
+            <!-- Right pupil -->
+            <Ellipse Canvas.Left="78" Canvas.Top="47" Width="6"  Height="6"  Fill="#1A1A2E"/>
+            <!-- Smile -->
+            <Path Canvas.Left="44" Canvas.Top="64"
+                  Stroke="#1A1A2E" StrokeThickness="2.5" StrokeLineCap="Round"
+                  Data="M 0,0 Q 8,8 16,0"/>
         </Canvas>
     </Grid>
 </Window>
