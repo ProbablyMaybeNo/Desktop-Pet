@@ -21,8 +21,8 @@ public sealed class PetEngineTests
     [Fact]
     public void Tick_OneHour_ReducesNeedsByDecayRate()
     {
-        var baseline = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-        var state    = FullPet(baseline);
+        var baseline     = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var state        = FullPet(baseline);
         var oneHourLater = baseline.AddHours(1);
 
         PetEngine.Tick(state, oneHourLater);
@@ -40,7 +40,7 @@ public sealed class PetEngineTests
         var baseline = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
         var state    = FullPet(baseline);
 
-        PetEngine.Tick(state, baseline);   // same time
+        PetEngine.Tick(state, baseline);
 
         Assert.Equal(100f, state.Hunger);
         Assert.Equal(100f, state.Hygiene);
@@ -50,13 +50,13 @@ public sealed class PetEngineTests
     [Fact]
     public void Tick_PastTime_DoesNotChangeState()
     {
-        var baseline  = new DateTime(2025, 1, 1, 12, 0, 0, DateTimeKind.Utc);
-        var state     = FullPet(baseline);
-        var pastTime  = baseline.AddHours(-1);
+        var baseline = new DateTime(2025, 1, 1, 12, 0, 0, DateTimeKind.Utc);
+        var state    = FullPet(baseline);
+        var pastTime = baseline.AddHours(-1);
 
-        PetEngine.Tick(state, pastTime);   // going backwards
+        PetEngine.Tick(state, pastTime);
 
-        Assert.Equal(100f, state.Hunger);  // unchanged
+        Assert.Equal(100f, state.Hunger);
         Assert.Equal(baseline, state.LastUpdatedUtc);
     }
 
@@ -65,9 +65,8 @@ public sealed class PetEngineTests
     {
         var baseline = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
         var state    = FullPet(baseline);
-        var tenHoursLater = baseline.AddHours(100); // way past depletion
 
-        PetEngine.Tick(state, tenHoursLater);
+        PetEngine.Tick(state, baseline.AddHours(100));
 
         Assert.Equal(0f, state.Hunger);
         Assert.Equal(0f, state.Hygiene);
@@ -85,5 +84,26 @@ public sealed class PetEngineTests
         PetEngine.Tick(state, future);
 
         Assert.Equal(future, state.LastUpdatedUtc);
+    }
+
+    /// <summary>
+    /// Clock-skew guard: an absurdly large elapsed time (year gap) must still only
+    /// apply MaxElapsedHours (72h) of decay, leaving state at 0 but not overflowing.
+    /// </summary>
+    [Fact]
+    public void Tick_ExtremeClockSkew_CapsAtMaxElapsedHours_AndClampsTo0()
+    {
+        var baseline = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var state    = FullPet(baseline);
+
+        // 10-year gap — should not overflow or produce negative values
+        PetEngine.Tick(state, baseline.AddDays(365 * 10));
+
+        Assert.Equal(0f, state.Hunger);
+        Assert.Equal(0f, state.Hygiene);
+        Assert.Equal(0f, state.Fun);
+        Assert.Equal(0f, state.Knowledge);
+        // LastUpdatedUtc should be set to the 'now' passed in
+        Assert.True(state.LastUpdatedUtc > baseline);
     }
 }

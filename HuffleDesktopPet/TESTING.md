@@ -22,7 +22,8 @@ dotnet test src\HuffleDesktopPet.Tests\HuffleDesktopPet.Tests.csproj --logger "c
 | Test class | What it tests |
 |---|---|
 | `PetStateSerializationTests` | JSON round-trip, valid JSON shape, invalid JSON throws |
-| `PetEngineTests` | 1-hour decay rates, zero-elapsed no-op, past-time guard, clamp at 0 |
+| `PetEngineTests` | 1-hour decay rates, zero-elapsed no-op, past-time guard, clamp at 0, clock-skew cap |
+| `WanderServiceTests` | Bounds clamping, zero/negative delta, movement start, 500-tick bounds check, SetPosition |
 
 All tests must pass on a fresh clone before any PR is merged.
 
@@ -82,6 +83,17 @@ These are the baseline checks to confirm the scaffold is healthy.
 - [ ] Pet does not walk off screen edges (clamped to monitor bounds)
 - [ ] Movement looks smooth (no jitter)
 - [ ] Pet pauses occasionally (idle animation or state)
+
+---
+
+## Manual test checklist — Milestone D (needs + persistence)
+
+- [ ] After running the app for 2+ minutes, hover the pet — tooltip shows need values
+- [ ] Close the app; reopen — need values are lower than at first launch (decay persisted)
+- [ ] `%AppData%\HuffleDesktopPet\pet_state.json` is created on first run
+- [ ] `%AppData%\HuffleDesktopPet\pet_state.json.bak` exists after second run
+- [ ] Manually corrupt `pet_state.json` (delete some characters); app still opens using `.bak`
+- [ ] Pet position is roughly preserved between restarts (within primary monitor bounds)
 
 ---
 

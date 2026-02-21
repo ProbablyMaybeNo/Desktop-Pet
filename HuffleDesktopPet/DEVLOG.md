@@ -59,6 +59,54 @@ Ongoing record of decisions, gotchas, and lessons learned.
 
 ---
 
+---
+
+## 2025-02-21 — Milestones B, C, D implemented
+
+### Choices confirmed by user
+
+| Question | Answer |
+|---|---|
+| WPF vs WinUI 3 | WPF |
+| Monitor scope | Single monitor |
+| Sprite format | Placeholder (ellipse) |
+| Window style | Small moving window |
+| Controls | Tray-only (no hotkey) |
+
+### Milestone B decisions
+
+**WinForms `NotifyIcon` over `Hardcodet.NotifyIcon.Wpf`**
+- `<UseWindowsForms>true</UseWindowsForms>` unlocks `System.Windows.Forms` — zero extra NuGet packages.
+- 16×16 tray icon painted in-memory via `System.Drawing.Bitmap` — no `.ico` file required.
+
+**Click-through via P/Invoke `SetWindowLong`**
+- `WS_EX_TRANSPARENT | WS_EX_LAYERED` is the only reliable OS-level click-through method.
+- WPF's `IsHitTestVisible="False"` alone is insufficient — OS still routes clicks to the WPF HWND.
+- HWND is available after `OnContentRendered` (constructor is too early).
+
+### Milestone C decisions
+
+**Pure-Core `WanderService`**
+- No WPF dependency; bounds passed in from the UI layer.
+- Seeded RNG enables deterministic unit tests.
+- `FacingLeft` exposed for future sprite mirroring.
+- `DispatcherPriority.Background` on the 33 ms timer prevents blocking drag/input.
+
+### Milestone D decisions
+
+**72-hour cap on elapsed decay**
+- Guards against long hibernate, clock jumps, corrupted `LastUpdatedUtc`.
+- Pet still fully depletes for any gap > ~10 hours; cap prevents float overflow.
+
+**Atomic save via `File.Replace()`**
+- Write `.tmp` → `File.Replace(.tmp → .json, backup: .json.bak)`.
+- If process killed mid-write, previous `.json` is intact; `.bak` is the fallback.
+- `LoadAsync` tries primary → backup → fresh state.
+
+**Auto-save every 60 seconds**
+- Fire-and-forget `_ = PetPersistence.SaveAsync(...)` in the needs timer.
+- `OnClosed` awaits and also persists fractional window position.
+
 ## Future entries
 
 _(Add entries here as development progresses.)_
