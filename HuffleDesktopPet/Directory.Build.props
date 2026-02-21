@@ -1,0 +1,19 @@
+<Project>
+
+  <PropertyGroup>
+    <!-- Shared settings across all projects in this solution -->
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <Platforms>x64</Platforms>
+
+    <!-- Deterministic builds -->
+    <Deterministic>true</Deterministic>
+
+    <!-- Analysis -->
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <AnalysisLevel>latest</AnalysisLevel>
+  </PropertyGroup>
+
+</Project>

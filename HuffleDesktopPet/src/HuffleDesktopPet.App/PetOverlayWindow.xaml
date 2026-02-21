@@ -1,0 +1,38 @@
+<Window x:Class="HuffleDesktopPet.PetOverlayWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="HuffleDesktopPet"
+        Width="120" Height="120"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        Topmost="True"
+        ShowInTaskbar="False"
+        ResizeMode="NoResize">
+
+    <Grid>
+        <!--
+            MILESTONE A PLACEHOLDER
+            Replace this Ellipse with a real sprite/image once assets are ready.
+            The background is fully transparent — only the shape is visible.
+        -->
+        <Ellipse Width="80" Height="80"
+                 Fill="#CC7B5EA6"
+                 Stroke="#FF4A2D7A"
+                 StrokeThickness="3"
+                 HorizontalAlignment="Center"
+                 VerticalAlignment="Center">
+            <Ellipse.ToolTip>Huffle is here!</Ellipse.ToolTip>
+        </Ellipse>
+
+        <!-- Placeholder face dots -->
+        <Canvas>
+            <Ellipse Canvas.Left="38" Canvas.Top="38" Width="8" Height="8" Fill="White"/>
+            <Ellipse Canvas.Left="74" Canvas.Top="38" Width="8" Height="8" Fill="White"/>
+            <Ellipse Canvas.Left="38" Canvas.Top="38" Width="4" Height="4"
+                     Fill="#333" Canvas.Left="40" Canvas.Top="40"/>
+            <Ellipse Canvas.Left="74" Canvas.Top="38" Width="4" Height="4"
+                     Fill="#333" Canvas.Left="76" Canvas.Top="40"/>
+        </Canvas>
+    </Grid>
+</Window>

@@ -1,0 +1,64 @@
+# DEVLOG — HuffleDesktopPet
+
+Ongoing record of decisions, gotchas, and lessons learned.
+
+---
+
+## 2025-02-21 — Initial scaffold
+
+### Decisions
+
+**WPF chosen over WinUI 3**
+- WPF's `AllowsTransparency="True"` + `WindowStyle="None"` + `Topmost="True"` gives a zero-friction transparent overlay without needing XAML Islands or the Desktop Bridge.
+- WinUI 3 requires MSIX packaging or a newer app model for always-on-top transparent overlays and has more friction for a developer-only demo.
+- Decision is not final — WinUI 3 will be reconsidered if WPF rendering quality is poor.
+
+**Core library with no WPF dependency**
+- `HuffleDesktopPet.Core` targets `net8.0-windows` but imports no WPF namespaces.
+- This lets `PetEngine` and `PetPersistence` be unit-tested without spinning up a WPF dispatcher.
+- The WPF app consumes Core as a project reference.
+
+**Persistence via System.Text.Json**
+- No external serialization library. `System.Text.Json` is built into .NET 8 and is fast.
+- Save path: `%AppData%\HuffleDesktopPet\pet_state.json` — follows Windows app data conventions.
+- If the file is missing on startup, a fresh `PetState` with defaults is used (graceful degradation).
+
+**xUnit for tests**
+- Standard in .NET ecosystem, integrates with VS Test Explorer and `dotnet test`.
+
+**`global.json` `rollForward: latestMajor`**
+- Pins to .NET 8 minimum but allows 9+ if installed. Prevents accidental use of a preview SDK.
+
+**`Directory.Build.props`**
+- Keeps shared settings (Nullable, ImplicitUsings, LangVersion) DRY across all three projects.
+- Kept intentionally minimal — no complex MSBuild magic.
+
+**PowerShell scripts**
+- Chosen over `Makefile` because the target machine is Windows. PowerShell 5.1 is always available on Win 10/11.
+- Scripts are in `tools/scripts/` and are self-contained (no external modules).
+
+### Gotchas
+
+**`ApplicationIcon` in App.csproj**
+- References `Assets\huffle.ico`. This file does NOT exist yet — it is a placeholder.
+- The project will still build (the `.ico` is optional for `WinExe` if the asset isn't included in the build).
+- Add a real `.ico` before Milestone A to avoid a build warning.
+
+**Click-through on WPF**
+- WPF's `IsHitTestVisible="False"` only prevents WPF hit-testing, but Windows still receives `WM_NCHITTEST` hits.
+- True Windows-level click-through requires P/Invoking `SetWindowLong` with `WS_EX_TRANSPARENT` on the window HWND.
+- This is deferred to Milestone B — documented here to avoid the false expectation that XAML alone is sufficient.
+
+**Single-monitor assumption for v1**
+- `SystemParameters.WorkArea` returns the primary monitor's work area.
+- Multi-monitor wander logic requires enumerating monitors via `Screen.AllScreens` (WinForms) or `Monitor` P/Invoke.
+- Deferred to post-v1.
+
+**WPF + .NET 8 on ARM64**
+- Not tested. The scaffold targets `x64`. ARM64 may need a separate `Platforms` value.
+
+---
+
+## Future entries
+
+_(Add entries here as development progresses.)_

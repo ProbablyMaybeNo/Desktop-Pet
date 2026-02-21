@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <LangVersion>latest</LangVersion>
+    <Platforms>x64</Platforms>
+    <ApplicationIcon>Assets\huffle.ico</ApplicationIcon>
+    <RootNamespace>HuffleDesktopPet</RootNamespace>
+    <AssemblyName>HuffleDesktopPet</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\HuffleDesktopPet.Core\HuffleDesktopPet.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Placeholder icon - replace with real asset before Milestone A -->
+    <None Update="Assets\huffle.ico" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>
