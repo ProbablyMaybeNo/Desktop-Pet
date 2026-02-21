@@ -3,7 +3,7 @@ using HuffleDesktopPet.Core.Models;
 namespace HuffleDesktopPet.Core.Services;
 
 /// <summary>
-/// Applies time-based decay to pet needs.
+/// Applies time-based decay and player interactions to pet needs.
 /// Runs independently of UI — unit-testable.
 /// </summary>
 public static class PetEngine
@@ -44,5 +44,46 @@ public static class PetEngine
 
         state.Clamp();
         state.LastUpdatedUtc = now;
+    }
+
+    // ── Interactions ──────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Feed the pet: restores Hunger (+40), slightly reduces Hygiene (-5, eating is messy).
+    /// </summary>
+    public static void Feed(PetState state)
+    {
+        state.Hunger  += 40f;
+        state.Hygiene -=  5f;
+        state.Clamp();
+    }
+
+    /// <summary>
+    /// Play with the pet: restores Fun (+35), burns Hunger (-8, playing takes energy).
+    /// </summary>
+    public static void Play(PetState state)
+    {
+        state.Fun    += 35f;
+        state.Hunger -=  8f;
+        state.Clamp();
+    }
+
+    /// <summary>
+    /// Clean the pet: restores Hygiene (+50).
+    /// </summary>
+    public static void Clean(PetState state)
+    {
+        state.Hygiene += 50f;
+        state.Clamp();
+    }
+
+    /// <summary>
+    /// Teach/study with the pet: restores Knowledge (+25), slightly reduces Fun (-5).
+    /// </summary>
+    public static void Study(PetState state)
+    {
+        state.Knowledge += 25f;
+        state.Fun       -=  5f;
+        state.Clamp();
     }
 }

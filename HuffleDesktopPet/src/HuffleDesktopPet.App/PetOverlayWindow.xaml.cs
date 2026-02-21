@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
+using System.Windows.Media;
 using System.Windows.Threading;
 using HuffleDesktopPet.Core.Models;
 using HuffleDesktopPet.Core.Services;
@@ -16,6 +17,7 @@ namespace HuffleDesktopPet;
 /// Milestone B  — tray icon, click-through toggle ✓
 /// Milestone C  — autonomous wandering via WanderService ✓
 /// Milestone D  — need decay + auto-save + tooltip ✓
+/// Milestone E  — interactions (Feed/Play/Clean/Study) + visual need states + startup toggle ✓
 /// </summary>
 public partial class PetOverlayWindow : Window
 {
@@ -28,8 +30,10 @@ public partial class PetOverlayWindow : Window
     private DispatcherTimer _needsTimer  = null!;   // every 60 s
 
     // ── Tray ──────────────────────────────────────────────────────────────────
-    private WinForms.NotifyIcon   _trayIcon   = null!;
-    private WinForms.ContextMenuStrip _trayMenu = null!;
+    private WinForms.NotifyIcon       _trayIcon          = null!;
+    private WinForms.ContextMenuStrip _trayMenu          = null!;
+    private WinForms.ToolStripMenuItem _trayItemClickThrough = null!;
+    private WinForms.ToolStripMenuItem _trayItemStartup      = null!;
 
     // ── Click-through state ───────────────────────────────────────────────────
     private bool _clickThrough = false;
@@ -40,6 +44,11 @@ public partial class PetOverlayWindow : Window
     private const int GWL_EXSTYLE       = -20;
     private const int WS_EX_LAYERED     = 0x00080000;
     private const int WS_EX_TRANSPARENT = 0x00000020;
+
+    // ── Body fill colours ─────────────────────────────────────────────────────
+    private static readonly SolidColorBrush BrushNormal   = new(Color.FromArgb(0xCC, 0x7B, 0x5E, 0xA6));
+    private static readonly SolidColorBrush BrushWarning  = new(Color.FromArgb(0xCC, 0xCC, 0x88, 0x33));
+    private static readonly SolidColorBrush BrushCritical = new(Color.FromArgb(0xCC, 0xCC, 0x44, 0x33));
 
     // ─────────────────────────────────────────────────────────────────────────
 
@@ -78,7 +87,7 @@ public partial class PetOverlayWindow : Window
         Top  = _wander.Y;
 
         StartTimers();
-        RefreshNeedsTooltip();
+        RefreshPetAppearance();
     }
 
     protected override async void OnClosed(EventArgs e)
@@ -126,7 +135,7 @@ public partial class PetOverlayWindow : Window
 
     private void OnWanderTick(object? sender, EventArgs e)
     {
-        var now     = DateTime.UtcNow;
+        var now      = DateTime.UtcNow;
         double delta = (now - _lastWanderTick).TotalSeconds;
         _lastWanderTick = now;
 
@@ -138,15 +147,41 @@ public partial class PetOverlayWindow : Window
     private void OnNeedsTick(object? sender, EventArgs e)
     {
         PetEngine.Tick(_state, DateTime.UtcNow);
-        RefreshNeedsTooltip();
-        // Fire-and-forget auto-save (no await in event handler)
+        RefreshPetAppearance();
         _ = PetPersistence.SaveAsync(_state);
     }
 
-    // ── Needs tooltip ─────────────────────────────────────────────────────────
+    // ── Visual state ──────────────────────────────────────────────────────────
 
-    private void RefreshNeedsTooltip()
+    /// <summary>
+    /// Updates body colour, expression, and tooltip to reflect the current need levels.
+    /// Normal (all > 40): purple + smile.
+    /// Warning (any between 20–40): orange + smile.
+    /// Critical (any below 20): red + frown.
+    /// </summary>
+    private void RefreshPetAppearance()
     {
+        float minNeed = Math.Min(Math.Min(_state.Hunger, _state.Hygiene), _state.Fun);
+
+        if (minNeed < 20f)
+        {
+            PetBody.Fill        = BrushCritical;
+            PetSmile.Visibility = Visibility.Collapsed;
+            PetFrown.Visibility = Visibility.Visible;
+        }
+        else if (minNeed < 40f)
+        {
+            PetBody.Fill        = BrushWarning;
+            PetSmile.Visibility = Visibility.Visible;
+            PetFrown.Visibility = Visibility.Collapsed;
+        }
+        else
+        {
+            PetBody.Fill        = BrushNormal;
+            PetSmile.Visibility = Visibility.Visible;
+            PetFrown.Visibility = Visibility.Collapsed;
+        }
+
         NeedsText.Text =
             $"Hunger    {_state.Hunger,5:F0}/100\n" +
             $"Hygiene   {_state.Hygiene,5:F0}/100\n" +
@@ -154,15 +189,50 @@ public partial class PetOverlayWindow : Window
             $"Knowledge {_state.Knowledge,5:F0}/100";
     }
 
+    // ── Interactions ──────────────────────────────────────────────────────────
+
+    private enum Interaction { Feed, Play, Clean, Study }
+
+    private void OnInteract(Interaction action)
+    {
+        switch (action)
+        {
+            case Interaction.Feed:  PetEngine.Feed(_state);  break;
+            case Interaction.Play:  PetEngine.Play(_state);  break;
+            case Interaction.Clean: PetEngine.Clean(_state); break;
+            case Interaction.Study: PetEngine.Study(_state); break;
+        }
+        RefreshPetAppearance();
+        _ = PetPersistence.SaveAsync(_state);
+    }
+
+    // XAML context menu click handlers
+    private void OnFeedClick(object  sender, RoutedEventArgs e) => OnInteract(Interaction.Feed);
+    private void OnPlayClick(object  sender, RoutedEventArgs e) => OnInteract(Interaction.Play);
+    private void OnCleanClick(object sender, RoutedEventArgs e) => OnInteract(Interaction.Clean);
+    private void OnStudyClick(object sender, RoutedEventArgs e) => OnInteract(Interaction.Study);
+
     // ── Tray icon ─────────────────────────────────────────────────────────────
 
     private void BuildTrayIcon()
     {
+        _trayItemClickThrough = new WinForms.ToolStripMenuItem("Click-through: OFF", null, OnTrayToggleClickThrough);
+        _trayItemStartup      = new WinForms.ToolStripMenuItem(
+            StartupManager.IsEnabled() ? "Start with Windows: ON" : "Start with Windows: OFF",
+            null, OnTrayToggleStartup);
+
         _trayMenu = new WinForms.ContextMenuStrip();
-        _trayMenu.Items.Add("Show / Hide",         null, OnTrayToggleVisibility);
-        _trayMenu.Items.Add("Click-through: OFF",  null, OnTrayToggleClickThrough);
+        _trayMenu.Items.Add("Show / Hide",            null, OnTrayToggleVisibility);
+        _trayMenu.Items.Add(_trayItemClickThrough);
         _trayMenu.Items.Add(new WinForms.ToolStripSeparator());
-        _trayMenu.Items.Add("Exit",                null, OnTrayExit);
+        _trayMenu.Items.Add("Feed",  null, (_, _) => OnInteract(Interaction.Feed));
+        _trayMenu.Items.Add("Play",  null, (_, _) => OnInteract(Interaction.Play));
+        _trayMenu.Items.Add("Clean", null, (_, _) => OnInteract(Interaction.Clean));
+        _trayMenu.Items.Add("Study", null, (_, _) => OnInteract(Interaction.Study));
+        _trayMenu.Items.Add(new WinForms.ToolStripSeparator());
+        _trayMenu.Items.Add(_trayItemStartup);
+        _trayMenu.Items.Add(new WinForms.ToolStripSeparator());
+        _trayMenu.Items.Add("Exit",                   null, OnTrayExit);
 
         _trayIcon = new WinForms.NotifyIcon
         {
@@ -202,18 +272,32 @@ public partial class PetOverlayWindow : Window
     {
         _clickThrough = !_clickThrough;
 
-        var hwnd   = new WindowInteropHelper(this).Handle;
+        var hwnd    = new WindowInteropHelper(this).Handle;
         int exStyle = GetWindowLong(hwnd, GWL_EXSTYLE);
 
         if (_clickThrough)
         {
             SetWindowLong(hwnd, GWL_EXSTYLE, exStyle | WS_EX_LAYERED | WS_EX_TRANSPARENT);
-            ((WinForms.ToolStripMenuItem)_trayMenu.Items[1]).Text = "Click-through: ON";
+            _trayItemClickThrough.Text = "Click-through: ON";
         }
         else
         {
             SetWindowLong(hwnd, GWL_EXSTYLE, exStyle & ~WS_EX_TRANSPARENT);
-            ((WinForms.ToolStripMenuItem)_trayMenu.Items[1]).Text = "Click-through: OFF";
+            _trayItemClickThrough.Text = "Click-through: OFF";
+        }
+    }
+
+    private void OnTrayToggleStartup(object? sender, EventArgs e)
+    {
+        if (StartupManager.IsEnabled())
+        {
+            StartupManager.Disable();
+            _trayItemStartup.Text = "Start with Windows: OFF";
+        }
+        else
+        {
+            StartupManager.Enable(Environment.ProcessPath ?? string.Empty);
+            _trayItemStartup.Text = "Start with Windows: ON";
         }
     }
 

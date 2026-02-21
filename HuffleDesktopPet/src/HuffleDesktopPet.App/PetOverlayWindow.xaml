@@ -14,6 +14,8 @@
         PLACEHOLDER PET — purple circle with eyes.
         Replace with real sprite (Image tag) once assets are ready.
         Window background is fully transparent; only these shapes render.
+
+        Milestone E — interactions (Feed/Play/Clean/Study) + visual need states
     -->
     <Grid x:Name="RootGrid">
         <Grid.ToolTip>
@@ -22,8 +24,19 @@
             </ToolTip>
         </Grid.ToolTip>
 
-        <!-- Body -->
-        <Ellipse Width="80" Height="80"
+        <!-- Right-click context menu on the pet body -->
+        <Grid.ContextMenu>
+            <ContextMenu>
+                <MenuItem Header="Feed"  Click="OnFeedClick"/>
+                <MenuItem Header="Play"  Click="OnPlayClick"/>
+                <MenuItem Header="Clean" Click="OnCleanClick"/>
+                <MenuItem Header="Study" Click="OnStudyClick"/>
+            </ContextMenu>
+        </Grid.ContextMenu>
+
+        <!-- Body — named so code-behind can tint it for need states -->
+        <Ellipse x:Name="PetBody"
+                 Width="80" Height="80"
                  Fill="#CC7B5EA6"
                  Stroke="#FF4A2D7A"
                  StrokeThickness="3"
@@ -40,10 +53,17 @@
             <Ellipse Canvas.Left="38" Canvas.Top="47" Width="6"  Height="6"  Fill="#1A1A2E"/>
             <!-- Right pupil -->
             <Ellipse Canvas.Left="78" Canvas.Top="47" Width="6"  Height="6"  Fill="#1A1A2E"/>
-            <!-- Smile -->
-            <Path Canvas.Left="44" Canvas.Top="64"
+            <!-- Smile (happy — default) -->
+            <Path x:Name="PetSmile"
+                  Canvas.Left="44" Canvas.Top="64"
                   Stroke="#1A1A2E" StrokeThickness="2.5" StrokeLineCap="Round"
                   Data="M 0,0 Q 8,8 16,0"/>
+            <!-- Frown (sad — shown when any need is critical) -->
+            <Path x:Name="PetFrown"
+                  Canvas.Left="44" Canvas.Top="72"
+                  Stroke="#1A1A2E" StrokeThickness="2.5" StrokeLineCap="Round"
+                  Visibility="Collapsed"
+                  Data="M 0,0 Q 8,-8 16,0"/>
         </Canvas>
     </Grid>
 </Window>
