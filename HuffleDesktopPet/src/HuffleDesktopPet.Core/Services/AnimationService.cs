@@ -12,13 +12,19 @@ namespace HuffleDesktopPet.Core.Services;
 ///   2. Walk (while moving)
 ///   3. Sad  (any need below critical threshold)
 ///   4. Hungry / Dirty / Bored (whichever need is lowest)
-///   5. Idle (default)
+///   5. Sleep (scheduled night/nap windows, or extended inactivity — unless woken)
+///   6. Happy (all needs > 70 %)
+///   7. Idle (default)
 /// </summary>
 public sealed class AnimationService
 {
     // ── Thresholds ────────────────────────────────────────────────────────────
     private const float CriticalThreshold = 20f;
     private const float WarningThreshold  = 30f;
+    private const float HappyThreshold    = 70f;
+
+    /// <summary>Minutes of no movement before the pet nods off outside schedule.</summary>
+    private const double InactivitySleepMinutes = 15.0;
 
     // ── FPS per animation state ───────────────────────────────────────────────
     private static double GetFps(string state) => state switch
@@ -39,6 +45,8 @@ public sealed class AnimationService
     private readonly Dictionary<string, int> _frameCounts;
     private string?  _transientState;
     private double   _elapsed;
+    private double   _inactivitySeconds;
+    private DateTime _wokenUntil = DateTime.MinValue;   // forced-awake deadline
 
     // ── Public state ──────────────────────────────────────────────────────────
 
@@ -80,6 +88,17 @@ public sealed class AnimationService
     }
 
     /// <summary>
+    /// Wake the pet up for <paramref name="durationMinutes"/> minutes,
+    /// overriding any scheduled sleep window.  Call this when the user
+    /// interacts with the pet while it is sleeping.
+    /// </summary>
+    public void WakeUp(double durationMinutes = 5.0)
+    {
+        _inactivitySeconds = 0;
+        _wokenUntil = DateTime.Now.AddMinutes(durationMinutes);
+    }
+
+    /// <summary>
     /// Advance the animation by <paramref name="deltaSeconds"/>.
     /// Call once per render tick (~30 fps from the wander timer).
     /// </summary>
@@ -90,10 +109,17 @@ public sealed class AnimationService
     {
         if (deltaSeconds <= 0) return;
 
+        // Track inactivity: reset whenever the pet is moving or a transient fires
+        if (isMoving || _transientState is not null)
+            _inactivitySeconds = 0;
+        else
+            _inactivitySeconds += deltaSeconds;
+
         // If not in a transient, switch to whatever the passive state should be
         if (_transientState is null)
         {
-            string target = ResolvePassiveState(petState, isMoving);
+            bool forcedAwake = DateTime.Now < _wokenUntil;
+            string target = ResolvePassiveState(petState, isMoving, _inactivitySeconds, forcedAwake);
             if (CurrentState != target)
             {
                 CurrentState = target;
@@ -124,7 +150,17 @@ public sealed class AnimationService
     private int FrameCount(string state) =>
         _frameCounts.TryGetValue(state, out int n) ? Math.Max(1, n) : 1;
 
-    internal static string ResolvePassiveState(PetState state, bool isMoving)
+    /// <summary>
+    /// Determines the appropriate passive animation state.
+    /// Sleep schedule: 22:00 – 08:00 (night), 12:00 – 13:00 (noon nap), 16:00 – 17:00 (afternoon nap).
+    /// Extended inactivity (≥ 15 min) also triggers sleep when not forced awake.
+    /// </summary>
+    internal static string ResolvePassiveState(
+        PetState state,
+        bool isMoving,
+        double inactivitySeconds = 0,
+        bool forcedAwake = false,
+        DateTime? localNow = null)
     {
         if (isMoving) return "walk";
 
@@ -134,6 +170,27 @@ public sealed class AnimationService
         if (state.Hunger  < WarningThreshold) return "hungry";
         if (state.Hygiene < WarningThreshold) return "dirty";
         if (state.Fun     < WarningThreshold) return "bored";
+
+        // Sleep check (skipped when user has manually woken the pet)
+        if (!forcedAwake)
+        {
+            var now  = localNow ?? DateTime.Now;
+            int hour = now.Hour;
+            bool isScheduledSleep =
+                hour >= 22 || hour < 8 ||          // night: 22:00 – 08:00
+                (hour == 12) ||                     // noon nap: 12:00 – 13:00
+                (hour == 16);                       // afternoon nap: 16:00 – 17:00
+            bool isInactiveTooLong = inactivitySeconds >= InactivitySleepMinutes * 60;
+
+            if (isScheduledSleep || isInactiveTooLong) return "sleep";
+        }
+
+        // Happy — all needs comfortably high
+        if (minNeed > HappyThreshold &&
+            state.Hunger  > HappyThreshold &&
+            state.Hygiene > HappyThreshold &&
+            state.Fun     > HappyThreshold)
+            return "happy";
 
         return "idle";
     }

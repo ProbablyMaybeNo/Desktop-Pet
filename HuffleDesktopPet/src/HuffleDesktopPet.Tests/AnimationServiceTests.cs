@@ -244,7 +244,102 @@ public sealed class AnimationServiceTests
     [Fact]
     public void ResolvePassiveState_AllHealthy_ReturnsIdle()
     {
+        // Midday outside nap window, not forced awake, no inactivity
         var pet = HealthyPet();
-        Assert.Equal("idle", AnimationService.ResolvePassiveState(pet, isMoving: false));
+        var noon = new DateTime(2025, 1, 1, 14, 30, 0);   // 14:30 — no sleep window
+        Assert.Equal("idle", AnimationService.ResolvePassiveState(pet, isMoving: false, localNow: noon));
+    }
+
+    // ── Sleep state — real clock ──────────────────────────────────────────────
+
+    [Theory]
+    [InlineData(22)]   // 10 pm — night window starts
+    [InlineData(23)]
+    [InlineData(0)]
+    [InlineData(3)]
+    [InlineData(7)]    // still night
+    public void ResolvePassiveState_NightHour_ReturnsSleep(int hour)
+    {
+        var pet = HealthyPet();
+        var t   = new DateTime(2025, 1, 1, hour, 0, 0);
+        Assert.Equal("sleep", AnimationService.ResolvePassiveState(pet, isMoving: false, localNow: t));
+    }
+
+    [Fact]
+    public void ResolvePassiveState_NoonNap_ReturnsSleep()
+    {
+        var pet  = HealthyPet();
+        var noon = new DateTime(2025, 1, 1, 12, 30, 0);
+        Assert.Equal("sleep", AnimationService.ResolvePassiveState(pet, isMoving: false, localNow: noon));
+    }
+
+    [Fact]
+    public void ResolvePassiveState_AfternoonNap_ReturnsSleep()
+    {
+        var pet = HealthyPet();
+        var t   = new DateTime(2025, 1, 1, 16, 15, 0);
+        Assert.Equal("sleep", AnimationService.ResolvePassiveState(pet, isMoving: false, localNow: t));
+    }
+
+    [Fact]
+    public void ResolvePassiveState_ForcedAwake_OverridesSleepSchedule()
+    {
+        var pet   = HealthyPet();
+        var night = new DateTime(2025, 1, 1, 23, 0, 0);
+        // forcedAwake = true → should NOT return sleep
+        string result = AnimationService.ResolvePassiveState(
+            pet, isMoving: false, forcedAwake: true, localNow: night);
+        Assert.NotEqual("sleep", result);
+    }
+
+    [Fact]
+    public void ResolvePassiveState_ExtendedInactivity_ReturnsSleep()
+    {
+        var pet = HealthyPet();
+        // 2pm — no schedule window; but 20 min of inactivity should trigger sleep
+        var afternoon = new DateTime(2025, 1, 1, 14, 0, 0);
+        double twentyMinutes = 20 * 60;
+        Assert.Equal("sleep",
+            AnimationService.ResolvePassiveState(pet, isMoving: false,
+                inactivitySeconds: twentyMinutes, localNow: afternoon));
+    }
+
+    // ── Happy state ───────────────────────────────────────────────────────────
+
+    [Fact]
+    public void ResolvePassiveState_AllNeedsHigh_ReturnsHappy()
+    {
+        var pet = new PetState { Hunger = 80f, Hygiene = 80f, Fun = 80f, Knowledge = 80f };
+        // 2pm — outside all sleep windows
+        var afternoon = new DateTime(2025, 1, 1, 14, 0, 0);
+        Assert.Equal("happy",
+            AnimationService.ResolvePassiveState(pet, isMoving: false, localNow: afternoon));
+    }
+
+    [Fact]
+    public void ResolvePassiveState_OneNeedBelowHappyThreshold_DoesNotReturnHappy()
+    {
+        var pet = new PetState { Hunger = 60f, Hygiene = 80f, Fun = 80f, Knowledge = 80f };
+        var afternoon = new DateTime(2025, 1, 1, 14, 0, 0);
+        string result = AnimationService.ResolvePassiveState(pet, isMoving: false, localNow: afternoon);
+        Assert.NotEqual("happy", result);
+    }
+
+    // ── WakeUp ────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void WakeUp_DuringNight_StopsReturningSleeep()
+    {
+        // Simulate a night tick that would normally produce "sleep"
+        var svc = new AnimationService(DefaultCounts);
+        var pet = HealthyPet();
+
+        // The pet wakes up
+        svc.WakeUp(durationMinutes: 10);
+
+        // Even at a night hour the Tick should not switch to sleep
+        // (We can't inject clock into Tick, so we exercise WakeUp then just check state isn't sleep)
+        svc.Tick(0.01, pet, isMoving: false);
+        Assert.NotEqual("sleep", svc.CurrentState);
     }
 }

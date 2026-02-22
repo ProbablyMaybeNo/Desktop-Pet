@@ -29,6 +29,10 @@ public partial class PetOverlayWindow : Window
     private WanderService    _wander    = null!;
     private AnimationService? _animation;
 
+    // ── Sleep / faint cooldown ────────────────────────────────────────────────
+    private DateTime _lastFaintTime = DateTime.MinValue;
+    private const double FaintCooldownMinutes = 10.0;
+
     // ── Sprite frames ─────────────────────────────────────────────────────────
     // state-name → ordered array of pre-loaded, frozen BitmapImages
     private readonly Dictionary<string, BitmapImage[]> _spriteFrames = new();
@@ -180,6 +184,37 @@ public partial class PetOverlayWindow : Window
 
         // Display first frame immediately
         UpdateSpriteFrame();
+
+        // Upgrade tray icon to use the actual idle sprite
+        UpdateTrayIconFromSprite(spritesDir);
+    }
+
+    /// <summary>
+    /// Replaces the placeholder tray icon with a 32×32 version of the idle sprite.
+    /// Falls back silently if the file is missing or unreadable.
+    /// </summary>
+    private void UpdateTrayIconFromSprite(string spritesDir)
+    {
+        string path = Path.Combine(spritesDir, "huffle_idle_01.png");
+        if (!File.Exists(path)) return;
+
+        try
+        {
+            using var source = new Drawing.Bitmap(path);
+            using var scaled = new Drawing.Bitmap(32, 32);
+            using var g      = Drawing.Graphics.FromImage(scaled);
+            g.InterpolationMode = Drawing.Drawing2D.InterpolationMode.NearestNeighbor;
+            g.PixelOffsetMode   = Drawing.Drawing2D.PixelOffsetMode.Half;
+            g.DrawImage(source, 0, 0, 32, 32);
+
+            var hIcon = scaled.GetHicon();
+            var icon  = Drawing.Icon.FromHandle(hIcon);
+            _trayIcon.Icon = icon;
+        }
+        catch
+        {
+            // Keep placeholder icon — not a fatal error
+        }
     }
 
     /// <summary>Pushes the current animation frame to the Image element.</summary>
@@ -240,6 +275,15 @@ public partial class PetOverlayWindow : Window
         PetEngine.Tick(_state, DateTime.UtcNow);
         RefreshPetAppearance();
         _ = PetPersistence.SaveAsync(_state);
+
+        // Faint when any need bottoms out (with cooldown to avoid looping every tick)
+        bool anyDepleted = _state.Hunger < 1f || _state.Hygiene < 1f || _state.Fun < 1f;
+        if (anyDepleted && _animation is not null &&
+            (DateTime.UtcNow - _lastFaintTime).TotalMinutes >= FaintCooldownMinutes)
+        {
+            _lastFaintTime = DateTime.UtcNow;
+            _animation.TriggerTransient("faint");
+        }
     }
 
     // ── Visual state ──────────────────────────────────────────────────────────
@@ -285,6 +329,9 @@ public partial class PetOverlayWindow : Window
 
     private void OnInteract(Interaction action)
     {
+        // Wake the pet if it's sleeping so it reacts visually
+        _animation?.WakeUp();
+
         switch (action)
         {
             case Interaction.Feed:
@@ -307,6 +354,13 @@ public partial class PetOverlayWindow : Window
 
         RefreshPetAppearance();
         _ = PetPersistence.SaveAsync(_state);
+
+        // Celebrate if all needs are comfortably high — but only when no other
+        // transient is already playing (eat/clean/study play first; the passive
+        // "happy" state will follow naturally once they finish).
+        bool allNeedsHigh = _state.Hunger > 70f && _state.Hygiene > 70f && _state.Fun > 70f;
+        if (allNeedsHigh && _animation?.IsPlayingTransient == false)
+            _animation.TriggerTransient("celebrating");
     }
 
     // XAML ContextMenu handlers
