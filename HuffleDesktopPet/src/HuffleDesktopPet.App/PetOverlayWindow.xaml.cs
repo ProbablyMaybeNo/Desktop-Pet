@@ -316,11 +316,16 @@ public partial class PetOverlayWindow : Window
             PetFrown.Visibility = Visibility.Collapsed;
         }
 
+        string spriteState = _animation?.CurrentState ?? "placeholder";
+        string reason = _animation?.LastTransitionReason ?? "none";
+
         NeedsText.Text =
             $"Hunger    {_state.Hunger,5:F0}/100\n" +
             $"Hygiene   {_state.Hygiene,5:F0}/100\n" +
             $"Fun       {_state.Fun,5:F0}/100\n" +
-            $"Knowledge {_state.Knowledge,5:F0}/100";
+            $"Knowledge {_state.Knowledge,5:F0}/100\n" +
+            $"State     {spriteState}\n" +
+            $"Reason    {reason}";
     }
 
     // ── Interactions ──────────────────────────────────────────────────────────
