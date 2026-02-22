@@ -91,6 +91,22 @@
             </Image.RenderTransform>
         </Image>
 
+        <!-- ═══ ITEM OVERLAY (held object during "playing" animation) ════════ -->
+        <!--
+            Positioned in 128×128 window space via Margin (set by code-behind).
+            HorizontalAlignment=Left + VerticalAlignment=Top lets Margin act as
+            absolute pixel offset.  Collapsed when not in the "playing" state.
+        -->
+        <Image x:Name="ItemSprite"
+               Width="48" Height="48"
+               Stretch="Uniform"
+               RenderOptions.BitmapScalingMode="NearestNeighbor"
+               SnapsToDevicePixels="True"
+               Visibility="Collapsed"
+               HorizontalAlignment="Left"
+               VerticalAlignment="Top"
+               IsHitTestVisible="False"/>
+
         <!-- ═══ PARTICLE OVERLAY ════════════════════════════════════════════ -->
         <!--
             Code-behind populates this with Zzz (sleep) and heart (happy) TextBlocks.

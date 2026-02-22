@@ -155,7 +155,7 @@ public partial class PetOverlayWindow : Window
             // Mood
             "happy",
             // Interaction transients
-            "eat", "clean", "study", "poked",
+            "eat", "clean", "study", "poked", "playing",
             // Special / environmental
             "sleep", "faint", "celebrating", "booing", "cautious",
         ];
@@ -198,6 +198,7 @@ public partial class PetOverlayWindow : Window
         PetSprite.Visibility       = Visibility.Visible;
         PlaceholderGrid.Visibility = Visibility.Collapsed;
 
+        LoadItemSprites(spritesDir);
         UpdateSpriteFrame();
         UpdateTrayIconFromSprite(spritesDir);
     }
@@ -227,8 +228,73 @@ public partial class PetOverlayWindow : Window
     {
         // tired  → real sprites added (huffle_tired_01-04.png)
         // poked  → real sprites added (huffle_poked_01-04.png)
-        // playing → real sprites added (huffle_playing_01-08.png)
+        // playing → real sprites added (huffle_playing_01-06.png)
     };
+
+    // ── Item overlay ──────────────────────────────────────────────────────────
+
+    // Asset filenames: item_food_{name}.png / item_obj_{name}.png
+    private static readonly string[] FoodItemNames   = ["apple", "cupcake", "banana", "hamburger", "cherry"];
+    private static readonly string[] ObjectItemNames  = ["soccerball", "sword", "balloon", "book", "gamepad"];
+
+    // Paw anchor per playing frame in 64×64 sprite coordinates.
+    // Multiply by SpriteScale (= 128/64 = 2) to get window-pixel offset.
+    // Centre of the held item is placed here.
+    private static readonly (int X, int Y)[] PlayingAnchors =
+    [
+        (19, 29), // playing_01 — calm hold
+        (20, 29), // playing_02 — alert
+        (21, 34), // playing_03 — excited / sparkles
+        (20, 38), // playing_04 — overwhelmed
+        (23, 50), // playing_05 — big splash peak
+        (18, 55), // playing_06 — satisfied
+    ];
+
+    private readonly Dictionary<string, BitmapImage> _itemSprites = new();
+    private string? _heldItemKey;   // e.g. "obj_balloon" — null means no item shown
+
+    private void LoadItemSprites(string spritesDir)
+    {
+        foreach (string food in FoodItemNames)
+        {
+            string path = Path.Combine(spritesDir, $"item_food_{food}.png");
+            if (!File.Exists(path)) continue;
+            try
+            {
+                var bmp = new BitmapImage();
+                bmp.BeginInit();
+                bmp.UriSource   = new Uri(path);
+                bmp.CacheOption = BitmapCacheOption.OnLoad;
+                bmp.EndInit();
+                bmp.Freeze();
+                _itemSprites[$"food_{food}"] = bmp;
+            }
+            catch { }
+        }
+
+        foreach (string obj in ObjectItemNames)
+        {
+            string path = Path.Combine(spritesDir, $"item_obj_{obj}.png");
+            if (!File.Exists(path)) continue;
+            try
+            {
+                var bmp = new BitmapImage();
+                bmp.BeginInit();
+                bmp.UriSource   = new Uri(path);
+                bmp.CacheOption = BitmapCacheOption.OnLoad;
+                bmp.EndInit();
+                bmp.Freeze();
+                _itemSprites[$"obj_{obj}"] = bmp;
+            }
+            catch { }
+        }
+    }
+
+    private string PickRandomItem()
+    {
+        string name = ObjectItemNames[Random.Shared.Next(ObjectItemNames.Length)];
+        return $"obj_{name}";
+    }
 
     private void UpdateSpriteFrame()
     {
@@ -242,6 +308,35 @@ public partial class PetOverlayWindow : Window
 
         int idx = Math.Min(_animation.CurrentFrame, frames!.Length - 1);
         PetSprite.Source = frames[idx];
+        UpdateItemOverlay(state, idx);
+    }
+
+    private void UpdateItemOverlay(string state, int frameIdx)
+    {
+        if (state != "playing" || _heldItemKey is null ||
+            !_itemSprites.TryGetValue(_heldItemKey, out var itemBmp))
+        {
+            ItemSprite.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        const double SpriteScale = 128.0 / 64.0;  // source sprite → window pixels
+        const double ItemSize    = 48.0;           // rendered size of the item in window px
+
+        if (frameIdx >= 0 && frameIdx < PlayingAnchors.Length)
+        {
+            var (ax, ay) = PlayingAnchors[frameIdx];
+            // Anchor is the item's visual centre; compute top-left margin accordingly
+            ItemSprite.Width  = ItemSize;
+            ItemSprite.Height = ItemSize;
+            ItemSprite.Margin = new Thickness(
+                ax * SpriteScale - ItemSize / 2,
+                ay * SpriteScale - ItemSize / 2,
+                0, 0);
+        }
+
+        ItemSprite.Source     = itemBmp;
+        ItemSprite.Visibility = Visibility.Visible;
     }
 
     // ── Particle system ───────────────────────────────────────────────────────
@@ -469,7 +564,8 @@ public partial class PetOverlayWindow : Window
                 break;
             case Interaction.Play:
                 PetEngine.Play(_state);
-                // play sprite pending revised sheet
+                _heldItemKey = PickRandomItem();
+                _animation?.TriggerTransient("playing");
                 break;
             case Interaction.Clean:
                 PetEngine.Clean(_state);

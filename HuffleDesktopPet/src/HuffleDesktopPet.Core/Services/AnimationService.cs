@@ -34,6 +34,7 @@ public sealed class AnimationService
         "celebrating" => 7.0,
         "happy"       => 6.0,
         "poked"       => 8.0,
+        "playing"     => 6.0,
         _             => 3.0,   // hungry / tired / bored / dirty / sad / cautious / booing
     };
 
