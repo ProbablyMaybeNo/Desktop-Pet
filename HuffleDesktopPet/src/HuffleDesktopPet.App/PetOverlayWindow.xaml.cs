@@ -225,8 +225,9 @@ public partial class PetOverlayWindow : Window
     // Remove an entry once the real sprite sheet is added to assets/sprites/.
     private static readonly Dictionary<string, string> SpriteFallbacks = new()
     {
-        ["tired"] = "bored",   // droopy expression — close enough visually
-        ["poked"] = "happy",   // quick bright reaction
+        // tired  → real sprites added (huffle_tired_01-04.png)
+        // poked  → real sprites added (huffle_poked_01-04.png)
+        // playing → real sprites added (huffle_playing_01-08.png)
     };
 
     private void UpdateSpriteFrame()
