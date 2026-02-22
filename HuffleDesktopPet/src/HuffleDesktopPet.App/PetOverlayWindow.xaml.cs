@@ -125,8 +125,14 @@ public partial class PetOverlayWindow : Window
 
         string[] states =
         [
-            "walk", "idle", "eat", "clean",
-            "hungry", "bored", "dirty", "sad", "happy"
+            // Core loop states
+            "walk", "idle",
+            // Need states
+            "hungry", "bored", "dirty", "sad", "happy",
+            // Interaction transients
+            "eat", "clean", "study",
+            // Bonus states (used when available)
+            "sleep", "faint", "celebrating", "booing", "cautious",
         ];
 
         var frameCounts = new Dictionary<string, int>();
@@ -295,6 +301,7 @@ public partial class PetOverlayWindow : Window
                 break;
             case Interaction.Study:
                 PetEngine.Study(_state);
+                _animation?.TriggerTransient("study");
                 break;
         }
 

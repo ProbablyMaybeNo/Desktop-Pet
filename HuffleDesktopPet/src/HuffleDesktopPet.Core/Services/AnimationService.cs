@@ -8,7 +8,7 @@ namespace HuffleDesktopPet.Core.Services;
 /// No WPF dependency — fully unit-testable.
 ///
 /// Priority order:
-///   1. Transient (eat / clean — plays once, then reverts)
+///   1. Transient (eat / clean / study / faint — plays once, then reverts)
 ///   2. Walk (while moving)
 ///   3. Sad  (any need below critical threshold)
 ///   4. Hungry / Dirty / Bored (whichever need is lowest)
@@ -23,12 +23,16 @@ public sealed class AnimationService
     // ── FPS per animation state ───────────────────────────────────────────────
     private static double GetFps(string state) => state switch
     {
-        "walk"  => 8.0,
-        "idle"  => 3.0,
-        "eat"   => 5.0,
-        "clean" => 5.0,
-        "happy" => 6.0,
-        _       => 3.0,   // hungry / bored / dirty / sad
+        "walk"        => 8.0,
+        "idle"        => 3.0,
+        "eat"         => 5.0,
+        "clean"       => 5.0,
+        "study"       => 4.0,
+        "sleep"       => 1.5,   // slow breathing loop
+        "faint"       => 4.0,
+        "celebrating" => 7.0,
+        "happy"       => 6.0,
+        _             => 3.0,   // hungry / bored / dirty / sad / cautious / booing
     };
 
     // ── Internal state ────────────────────────────────────────────────────────
