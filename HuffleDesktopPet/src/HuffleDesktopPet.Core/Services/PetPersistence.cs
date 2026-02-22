@@ -57,34 +57,36 @@ public static class PetPersistence
     /// <summary>
     /// Loads state from <paramref name="path"/>.
     /// Falls back to the .bak file if the primary is corrupted.
-    /// Returns a fresh <see cref="PetState"/> if neither file exists.
+    /// Returns a fresh <see cref="PetState"/> if neither file exists or if the
+    /// persisted <see cref="PetState.StateVersion"/> does not match the current version.
     /// </summary>
     public static async Task<PetState> LoadAsync(string? path = null)
     {
         path ??= DefaultSavePath;
+        var fresh = new PetState();
+
+        PetState? loaded = null;
 
         if (File.Exists(path))
         {
-            try
-            {
-                return Deserialize(await File.ReadAllTextAsync(path));
-            }
-            catch (JsonException)
-            {
-                // Primary corrupt — try backup
-            }
+            try { loaded = Deserialize(await File.ReadAllTextAsync(path)); }
+            catch (JsonException) { /* primary corrupt — try backup */ }
         }
 
-        string bak = path + ".bak";
-        if (File.Exists(bak))
+        if (loaded is null)
         {
-            try
+            string bak = path + ".bak";
+            if (File.Exists(bak))
             {
-                return Deserialize(await File.ReadAllTextAsync(bak));
+                try { loaded = Deserialize(await File.ReadAllTextAsync(bak)); }
+                catch (JsonException) { /* backup also corrupt */ }
             }
-            catch (JsonException) { /* backup also corrupt */ }
         }
 
-        return new PetState();
+        // Discard saves from a previous schema version to avoid corrupt state
+        if (loaded is not null && loaded.StateVersion == fresh.StateVersion)
+            return loaded;
+
+        return fresh;
     }
 }

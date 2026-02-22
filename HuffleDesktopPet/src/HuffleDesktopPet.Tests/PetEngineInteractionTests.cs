@@ -1,3 +1,4 @@
+using HuffleDesktopPet.Core;
 using HuffleDesktopPet.Core.Models;
 using HuffleDesktopPet.Core.Services;
 using Xunit;
@@ -5,115 +6,222 @@ using Xunit;
 namespace HuffleDesktopPet.Tests;
 
 /// <summary>
-/// Verifies PetEngine interaction methods: Feed, Play, Clean, Study.
+/// Verifies PetEngine interactions and the minute-tick logic.
+/// All bars: 0 = satisfied (best), 100 = critical (worst).
 /// </summary>
 public sealed class PetEngineInteractionTests
 {
     // ── Feed ──────────────────────────────────────────────────────────────────
 
     [Fact]
-    public void Feed_IncreasesHunger_AndSlightlyReducesHygiene()
+    public void Feed_ReducesHunger()
     {
-        var state = new PetState { Hunger = 50f, Hygiene = 80f };
-        PetEngine.Feed(state);
-        Assert.Equal(90f, state.Hunger,  precision: 1);
-        Assert.Equal(75f, state.Hygiene, precision: 1);
+        var s = new PetState { Hunger = 60f };
+        PetEngine.Feed(s);
+        Assert.Equal(60f - NeedConfig.FeedHungerReduce, s.Hunger, precision: 1);
     }
 
     [Fact]
-    public void Feed_ClampsHungerAt100()
+    public void Feed_ClampsHungerAtZero()
     {
-        var state = new PetState { Hunger = 90f, Hygiene = 100f };
-        PetEngine.Feed(state);
-        Assert.Equal(100f, state.Hunger);
+        var s = new PetState { Hunger = 10f };
+        PetEngine.Feed(s);
+        Assert.Equal(0f, s.Hunger);
     }
 
     [Fact]
-    public void Feed_ClampsHygieneAtZero_WhenAlreadyLow()
+    public void Feed_IncreasesDirtySlightly()
     {
-        var state = new PetState { Hunger = 50f, Hygiene = 3f };
-        PetEngine.Feed(state);
-        Assert.Equal(0f, state.Hygiene);
+        var s = new PetState { Hunger = 60f, Dirty = 20f };
+        PetEngine.Feed(s);
+        Assert.Equal(20f + NeedConfig.FeedDirtyIncrease, s.Dirty, precision: 1);
+    }
+
+    [Fact]
+    public void Feed_ClearsHungerFaint()
+    {
+        var s = new PetState { Hunger = 95f, IsHungerFainted = true, IsFainting = true };
+        PetEngine.Feed(s);
+        Assert.False(s.IsHungerFainted);
+        Assert.False(s.IsFainting);
+    }
+
+    [Fact]
+    public void Feed_UpdatesLastInteractionTime()
+    {
+        var before = DateTime.UtcNow.AddSeconds(-1);
+        var s = new PetState();
+        PetEngine.Feed(s);
+        Assert.True(s.LastInteractionUtc > before);
     }
 
     // ── Play ──────────────────────────────────────────────────────────────────
 
     [Fact]
-    public void Play_IncreasesFun_AndReducesHunger()
+    public void Play_ReducesBored()
     {
-        var state = new PetState { Fun = 40f, Hunger = 80f };
-        PetEngine.Play(state);
-        Assert.Equal(75f, state.Fun,    precision: 1);
-        Assert.Equal(72f, state.Hunger, precision: 1);
+        var s = new PetState { Bored = 80f };
+        PetEngine.Play(s);
+        Assert.Equal(80f - NeedConfig.PlayBoredomReduce, s.Bored, precision: 1);
     }
 
     [Fact]
-    public void Play_ClampsFunAt100()
+    public void Play_ClampsBoredomAtZero()
     {
-        var state = new PetState { Fun = 90f, Hunger = 80f };
-        PetEngine.Play(state);
-        Assert.Equal(100f, state.Fun);
+        var s = new PetState { Bored = 10f };
+        PetEngine.Play(s);
+        Assert.Equal(0f, s.Bored);
     }
 
     [Fact]
-    public void Play_ClampsHungerAtZero_WhenAlreadyLow()
+    public void Play_ReducesSad()
     {
-        var state = new PetState { Fun = 50f, Hunger = 5f };
-        PetEngine.Play(state);
-        Assert.Equal(0f, state.Hunger);
+        var s = new PetState { Sad = 50f };
+        PetEngine.Play(s);
+        Assert.Equal(50f - NeedConfig.PlaySadReduce, s.Sad, precision: 1);
+    }
+
+    [Fact]
+    public void Play_IncreasesHungerSlightly()
+    {
+        var s = new PetState { Bored = 80f, Hunger = 20f };
+        PetEngine.Play(s);
+        Assert.Equal(20f + NeedConfig.PlayHungerIncrease, s.Hunger, precision: 1);
     }
 
     // ── Clean ─────────────────────────────────────────────────────────────────
 
     [Fact]
-    public void Clean_IncreasesHygiene()
+    public void Clean_ReducesDirty()
     {
-        var state = new PetState { Hygiene = 30f };
-        PetEngine.Clean(state);
-        Assert.Equal(80f, state.Hygiene, precision: 1);
+        var s = new PetState { Dirty = 70f };
+        PetEngine.Clean(s);
+        Assert.Equal(70f - NeedConfig.CleanDirtyReduce, s.Dirty, precision: 1);
     }
 
     [Fact]
-    public void Clean_ClampsHygieneAt100()
+    public void Clean_ClampsDirtyAtZero()
     {
-        var state = new PetState { Hygiene = 80f };
-        PetEngine.Clean(state);
-        Assert.Equal(100f, state.Hygiene);
+        var s = new PetState { Dirty = 10f };
+        PetEngine.Clean(s);
+        Assert.Equal(0f, s.Dirty);
     }
 
     [Fact]
-    public void Clean_DoesNotAffectOtherNeeds()
+    public void Clean_DoesNotAffectHungerOrTired()
     {
-        var state = new PetState { Hygiene = 30f, Hunger = 60f, Fun = 70f };
-        PetEngine.Clean(state);
-        Assert.Equal(60f, state.Hunger, precision: 1);
-        Assert.Equal(70f, state.Fun,    precision: 1);
+        var s = new PetState { Dirty = 70f, Hunger = 40f, Tired = 50f };
+        PetEngine.Clean(s);
+        Assert.Equal(40f, s.Hunger, precision: 1);
+        Assert.Equal(50f, s.Tired,  precision: 1);
     }
 
     // ── Study ─────────────────────────────────────────────────────────────────
 
     [Fact]
-    public void Study_IncreasesKnowledge_AndSlightlyReducesFun()
+    public void Study_ReducesBored()
     {
-        var state = new PetState { Knowledge = 30f, Fun = 50f };
-        PetEngine.Study(state);
-        Assert.Equal(55f, state.Knowledge, precision: 1);
-        Assert.Equal(45f, state.Fun,       precision: 1);
+        var s = new PetState { Bored = 60f };
+        PetEngine.Study(s);
+        Assert.True(s.Bored < 60f);
     }
 
     [Fact]
-    public void Study_ClampsKnowledgeAt100()
+    public void Study_IncreasesHungerSlightly()
     {
-        var state = new PetState { Knowledge = 90f, Fun = 80f };
-        PetEngine.Study(state);
-        Assert.Equal(100f, state.Knowledge);
+        var s = new PetState { Bored = 60f, Hunger = 10f };
+        PetEngine.Study(s);
+        Assert.True(s.Hunger > 10f);
+    }
+
+    // ── Tick — need fills ─────────────────────────────────────────────────────
+
+    [Fact]
+    public void Tick_IncreasesHungerOverTime()
+    {
+        var s   = new PetState();
+        var now = DateTime.UtcNow;
+        s.LastUpdatedUtc = now.AddMinutes(-60);   // 1 hour ago
+        PetEngine.Tick(s, now);
+        Assert.True(s.Hunger > 0f);
     }
 
     [Fact]
-    public void Study_ClampsFunAtZero_WhenAlreadyLow()
+    public void Tick_IncreasesHungerByExpectedAmount()
     {
-        var state = new PetState { Knowledge = 30f, Fun = 3f };
-        PetEngine.Study(state);
-        Assert.Equal(0f, state.Fun);
+        var s = new PetState();
+        var now = DateTime.UtcNow;
+        s.LastUpdatedUtc = now.AddMinutes(-60);
+        PetEngine.Tick(s, now);
+        // 60 min × HungerTickPerMin
+        float expected = 60f * NeedConfig.HungerTickPerMin;
+        Assert.Equal(expected, s.Hunger, precision: 1);
+    }
+
+    [Fact]
+    public void Tick_ClampsNeedsAt100()
+    {
+        var s = new PetState { Hunger = 99f };
+        var now = DateTime.UtcNow;
+        s.LastUpdatedUtc = now.AddMinutes(-240);   // 4 hours
+        PetEngine.Tick(s, now);
+        Assert.Equal(100f, s.Hunger);
+    }
+
+    [Fact]
+    public void Tick_ReturnedEvents_NoneWhenHealthy()
+    {
+        var s = new PetState();
+        var events = PetEngine.Tick(s, DateTime.UtcNow);
+        Assert.Equal(PetTickEvents.None, events);
+    }
+
+    // ── Tick — sleep transitions ──────────────────────────────────────────────
+
+    [Fact]
+    public void Tick_EntersSleepWindow_SetsSleeping()
+    {
+        // Simulate: last tick was before 10pm, now it's 10pm
+        var s = new PetState
+        {
+            LastUpdatedUtc = new DateTime(2025, 1, 1, 21, 55, 0, DateTimeKind.Local).ToUniversalTime()
+        };
+        var nowLocal = new DateTime(2025, 1, 1, 22, 5, 0, DateTimeKind.Local);
+        PetEngine.Tick(s, nowLocal.ToUniversalTime());
+        Assert.True(s.IsSleeping);
+    }
+
+    [Fact]
+    public void Tick_WokeEarly_DoesNotReEnterSleep()
+    {
+        var s = new PetState
+        {
+            WokeEarlyInWindow = true,
+            IsSleeping        = false,
+            LastUpdatedUtc    = new DateTime(2025, 1, 1, 22, 0, 0, DateTimeKind.Local).ToUniversalTime()
+        };
+        var nowLocal = new DateTime(2025, 1, 1, 22, 10, 0, DateTimeKind.Local);
+        PetEngine.Tick(s, nowLocal.ToUniversalTime());
+        Assert.False(s.IsSleeping);
+    }
+
+    // ── Tick — sad derivation ─────────────────────────────────────────────────
+
+    [Fact]
+    public void Tick_TwoNeedsAboveStage2_IncreasesSad()
+    {
+        var s = new PetState { Hunger = 70f, Dirty = 70f, Sad = 0f };
+        s.LastUpdatedUtc = DateTime.UtcNow.AddMinutes(-5);
+        PetEngine.Tick(s, DateTime.UtcNow);
+        Assert.True(s.Sad > 0f);
+    }
+
+    [Fact]
+    public void Tick_AllNeedsGood_DecreasesSad()
+    {
+        var s = new PetState { Sad = 50f };
+        s.LastUpdatedUtc = DateTime.UtcNow.AddMinutes(-10);
+        PetEngine.Tick(s, DateTime.UtcNow);
+        Assert.True(s.Sad < 50f);
     }
 }

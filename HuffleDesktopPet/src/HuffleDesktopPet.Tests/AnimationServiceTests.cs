@@ -1,3 +1,4 @@
+using HuffleDesktopPet.Core;
 using HuffleDesktopPet.Core.Models;
 using HuffleDesktopPet.Core.Services;
 using Xunit;
@@ -5,28 +6,46 @@ using Xunit;
 namespace HuffleDesktopPet.Tests;
 
 /// <summary>
-/// Verifies AnimationService state machine, frame advancement, and transient playback.
+/// Verifies AnimationService state machine, frame advancement, transient playback,
+/// priority stack, sad hysteresis, need prompts, and faint locking.
+/// All bars: 0 = satisfied (best), 100 = critical (worst).
 /// </summary>
 public sealed class AnimationServiceTests
 {
-    // Minimal frame counts used across most tests
+    // ── Fixtures ──────────────────────────────────────────────────────────────
+
     private static readonly Dictionary<string, int> DefaultCounts = new()
     {
-        ["idle"]   = 3,
-        ["walk"]   = 4,
-        ["hungry"] = 2,
-        ["bored"]  = 2,
-        ["dirty"]  = 2,
-        ["sad"]    = 2,
-        ["eat"]    = 4,
-        ["clean"]  = 4,
+        ["idle"]        = 4,
+        ["walk"]        = 4,
+        ["hungry"]      = 2,
+        ["tired"]       = 2,
+        ["dirty"]       = 2,
+        ["bored"]       = 2,
+        ["sad"]         = 2,
+        ["happy"]       = 3,
+        ["sleep"]       = 2,
+        ["faint"]       = 2,
+        ["eat"]         = 4,
+        ["clean"]       = 4,
+        ["study"]       = 4,
+        ["poked"]       = 2,
+        ["celebrating"] = 4,
     };
 
     private static AnimationService Make() => new(DefaultCounts);
 
+    /// <summary>Pet with all needs satisfied (0 = best, well within happy zone).</summary>
     private static PetState HealthyPet() => new()
     {
-        Hunger = 100f, Hygiene = 100f, Fun = 100f, Knowledge = 100f
+        Hunger = 0f, Tired = 0f, Dirty = 0f, Bored = 0f, Sad = 0f
+    };
+
+    /// <summary>Pet sleeping via scheduled window.</summary>
+    private static PetState SleepingPet() => new()
+    {
+        Hunger = 0f, Tired = 0f, Dirty = 0f, Bored = 0f, Sad = 0f,
+        IsSleeping = true
     };
 
     // ── Initial state ─────────────────────────────────────────────────────────
@@ -37,138 +56,124 @@ public sealed class AnimationServiceTests
         var svc = Make();
         Assert.Equal("idle", svc.CurrentState);
         Assert.Equal(0, svc.CurrentFrame);
-    }
-
-    [Fact]
-    public void InitialState_IsNotPlayingTransient()
-    {
-        var svc = Make();
         Assert.False(svc.IsPlayingTransient);
     }
 
-    // ── Passive state resolution ──────────────────────────────────────────────
+    // ── Priority 10: Idle (default) ───────────────────────────────────────────
 
     [Fact]
-    public void Tick_WhenMoving_SwitchesToWalk()
+    public void Tick_HealthyPet_NotMoving_IsIdle()
     {
-        var svc  = Make();
-        var pet  = HealthyPet();
-        svc.Tick(0.01, pet, isMoving: true);
+        var svc = Make();
+        svc.Tick(0.01, HealthyPet(), isMoving: false);
+        Assert.Equal("idle", svc.CurrentState);
+    }
+
+    // ── Priority 9: Happy ─────────────────────────────────────────────────────
+
+    [Fact]
+    public void Tick_AllNeedsLow_NotMoving_IsHappy()
+    {
+        // All below HappyNeedMax (30) and HappySadMax (30)
+        var svc = Make();
+        var pet = new PetState { Hunger = 5f, Tired = 5f, Dirty = 5f, Bored = 5f, Sad = 5f };
+        svc.Tick(0.01, pet, isMoving: false);
+        Assert.Equal("happy", svc.CurrentState);
+    }
+
+    [Fact]
+    public void Tick_OneNeedAboveHappyThreshold_NotHappy()
+    {
+        var svc = Make();
+        var pet = new PetState { Hunger = 35f, Tired = 5f, Dirty = 5f, Bored = 5f, Sad = 5f };
+        svc.Tick(0.01, pet, isMoving: false);
+        Assert.NotEqual("happy", svc.CurrentState);
+    }
+
+    // ── Priority 8: Walk ──────────────────────────────────────────────────────
+
+    [Fact]
+    public void Tick_WhenMoving_IsWalk()
+    {
+        var svc = Make();
+        svc.Tick(0.01, HealthyPet(), isMoving: true);
         Assert.Equal("walk", svc.CurrentState);
     }
 
+    // ── Priority 6: SAD (hysteresis) ─────────────────────────────────────────
+
     [Fact]
-    public void Tick_WhenStopped_HealthyNeeds_SwitchesToIdle()
+    public void Tick_SadBarAboveThreshold_ActivatesSadState()
     {
         var svc = Make();
         var pet = HealthyPet();
+        pet.Sad = NeedConfig.SadActiveThreshold + 1f;  // trigger condition
         svc.Tick(0.01, pet, isMoving: false);
-        Assert.Equal("idle", svc.CurrentState);
+        Assert.Equal("sad", svc.CurrentState);
+        Assert.True(svc.SadActive);
     }
 
     [Fact]
-    public void Tick_WhenStopped_AnyCriticalNeed_SwitchesToSad()
+    public void Tick_TwoNeedsAboveStage2_ActivatesSad()
     {
         var svc = Make();
-        var pet = HealthyPet();
-        pet.Hunger = 15f;   // below critical threshold (20)
+        var pet = new PetState { Hunger = 65f, Dirty = 65f };
         svc.Tick(0.01, pet, isMoving: false);
         Assert.Equal("sad", svc.CurrentState);
     }
 
     [Fact]
-    public void Tick_WhenStopped_HungerLow_SwitchesToHungry()
+    public void Sad_DoesNotClear_UntilBothConditionsResolve()
     {
+        // Activate sad via bar
         var svc = Make();
         var pet = HealthyPet();
-        pet.Hunger = 25f;   // below warning threshold (30) but above critical (20)
+        pet.Sad = NeedConfig.SadActiveThreshold + 5f;
         svc.Tick(0.01, pet, isMoving: false);
-        Assert.Equal("hungry", svc.CurrentState);
+        Assert.True(svc.SadActive);
+
+        // Drop to value between clear (40) and active (60) thresholds — should remain active
+        pet.Sad = 50f;
+        svc.Tick(0.01, pet, isMoving: false);
+        Assert.True(svc.SadActive);
+
+        // Drop below clear threshold — now clears
+        pet.Sad = NeedConfig.SadClearThreshold - 1f;
+        svc.Tick(0.01, pet, isMoving: false);
+        Assert.False(svc.SadActive);
     }
 
     [Fact]
-    public void Tick_WhenStopped_HygieneLow_SwitchesToDirty()
+    public void Sad_TakesPriorityOverWalk()
     {
         var svc = Make();
         var pet = HealthyPet();
-        pet.Hygiene = 25f;
-        svc.Tick(0.01, pet, isMoving: false);
-        Assert.Equal("dirty", svc.CurrentState);
-    }
-
-    [Fact]
-    public void Tick_WhenStopped_FunLow_SwitchesToBored()
-    {
-        var svc = Make();
-        var pet = HealthyPet();
-        pet.Fun = 25f;
-        svc.Tick(0.01, pet, isMoving: false);
-        Assert.Equal("bored", svc.CurrentState);
-    }
-
-    [Fact]
-    public void Tick_SadTakesPriorityOverHungry()
-    {
-        var svc = Make();
-        var pet = HealthyPet();
-        pet.Hunger = 10f;   // critical — should be "sad", not "hungry"
-        svc.Tick(0.01, pet, isMoving: false);
+        pet.Sad = 70f;
+        svc.Tick(0.01, pet, isMoving: true);   // moving but sad wins
         Assert.Equal("sad", svc.CurrentState);
     }
 
-    // ── State switching resets frame ──────────────────────────────────────────
+    // ── Priority 5: Scheduled sleep ───────────────────────────────────────────
 
     [Fact]
-    public void StateSwitch_ResetsFrameToZero()
+    public void Tick_IsSleeping_ReturnsSleep()
     {
         var svc = Make();
-        var pet = HealthyPet();
+        svc.Tick(0.01, SleepingPet(), isMoving: false);
+        Assert.Equal("sleep", svc.CurrentState);
+    }
 
-        // Advance to walk
-        svc.Tick(0.01, pet, isMoving: true);
-        // Pump enough time to advance a frame
-        svc.Tick(0.5, pet, isMoving: true);
-
-        // Switch back to idle
+    [Fact]
+    public void Tick_SadTakesPriorityOverScheduledSleep()
+    {
+        var svc = Make();
+        var pet = SleepingPet();
+        pet.Sad = 70f;
         svc.Tick(0.01, pet, isMoving: false);
-        Assert.Equal("idle", svc.CurrentState);
-        Assert.Equal(0, svc.CurrentFrame);
+        Assert.Equal("sad", svc.CurrentState);   // sad is priority 6, sleep is priority 5
     }
 
-    // ── Frame advancement ─────────────────────────────────────────────────────
-
-    [Fact]
-    public void Tick_ZeroDelta_DoesNotAdvanceFrame()
-    {
-        var svc = Make();
-        var pet = HealthyPet();
-        svc.Tick(0, pet, isMoving: false);
-        Assert.Equal(0, svc.CurrentFrame);
-    }
-
-    [Fact]
-    public void Tick_AfterOneFrameInterval_AdvancesToFrame1()
-    {
-        var svc = Make();   // idle = 3 fps → interval ≈ 0.333 s
-        var pet = HealthyPet();
-
-        svc.Tick(0.35, pet, isMoving: false);   // just past one interval
-        Assert.Equal(1, svc.CurrentFrame);
-    }
-
-    [Fact]
-    public void Tick_WrapsFrameBackToZero()
-    {
-        var svc = Make();   // idle has 3 frames at 3 fps → wraps after ~1 s
-        var pet = HealthyPet();
-
-        // Pump enough time to cycle all 3 frames
-        svc.Tick(1.1, pet, isMoving: false);
-        // Frame should have wrapped (not be >= frameCount)
-        Assert.InRange(svc.CurrentFrame, 0, 2);
-    }
-
-    // ── Transient animations ──────────────────────────────────────────────────
+    // ── Priority 4: Interaction transients ───────────────────────────────────
 
     [Fact]
     public void TriggerTransient_SwitchesToThatState()
@@ -193,27 +198,29 @@ public sealed class AnimationServiceTests
     public void Transient_BlocksPassiveStateSwitching()
     {
         var svc = Make();
-        var pet = HealthyPet();
-
         svc.TriggerTransient("eat");
-        svc.Tick(0.01, pet, isMoving: true);   // would normally switch to walk
+        svc.Tick(0.01, HealthyPet(), isMoving: true);   // would be walk without transient
+        Assert.Equal("eat", svc.CurrentState);
+    }
 
+    [Fact]
+    public void Transient_BlocksSleep()
+    {
+        var svc = Make();
+        svc.TriggerTransient("eat");
+        svc.Tick(0.01, SleepingPet(), isMoving: false);
         Assert.Equal("eat", svc.CurrentState);
     }
 
     [Fact]
     public void Transient_ClearsAfterPlayingAllFrames()
     {
-        // eat has 4 frames at 5 fps → interval = 0.2 s → full cycle = 0.8 s
+        // eat has 4 frames at 5 fps → 0.8 s per cycle
         var svc = Make();
         var pet = HealthyPet();
-
         svc.TriggerTransient("eat");
-
-        // Advance through all 4 frames (need 4 × 0.2 s = 0.8 s, add margin)
-        for (int i = 0; i < 50; i++)
-            svc.Tick(0.02, pet, isMoving: false);   // 50 × 20 ms = 1.0 s
-
+        for (int i = 0; i < 60; i++)
+            svc.Tick(0.02, pet, isMoving: false);   // 1.2 s total
         Assert.False(svc.IsPlayingTransient);
     }
 
@@ -222,124 +229,188 @@ public sealed class AnimationServiceTests
     {
         var svc = Make();
         var pet = HealthyPet();
-
         svc.TriggerTransient("eat");
-
-        // Run past the transient duration
-        for (int i = 0; i < 50; i++)
+        for (int i = 0; i < 60; i++)
             svc.Tick(0.02, pet, isMoving: false);
-
-        Assert.Equal("idle", svc.CurrentState);
+        Assert.Equal("happy", svc.CurrentState);   // healthy pet → happy
     }
 
-    // ── ResolvePassiveState (internal, tested directly) ───────────────────────
+    // ── Priority 3: Forced sleep ──────────────────────────────────────────────
 
     [Fact]
-    public void ResolvePassiveState_Moving_ReturnsWalk()
+    public void Tick_ForcedSleep_ReturnsSleep_IgnoresTransient()
     {
+        var svc = Make();
+        svc.TriggerTransient("eat");   // active transient
+        var pet = new PetState { IsForcedSleep = true };
+        svc.Tick(0.01, pet, isMoving: false);
+        // Forced sleep (priority 3) beats transient (priority 4)
+        Assert.Equal("sleep", svc.CurrentState);
+    }
+
+    // ── Priority 1: Faint (uninterruptible) ──────────────────────────────────
+
+    [Fact]
+    public void TriggerFaint_StartsUninterruptibleFaint()
+    {
+        var svc = Make();
+        svc.TriggerFaint();
+        Assert.Equal("faint", svc.CurrentState);
+        Assert.True(svc.IsFaintLocked);
+    }
+
+    [Fact]
+    public void FaintLock_PreventsTriggerTransient()
+    {
+        var svc = Make();
+        svc.TriggerFaint();
+        svc.TriggerTransient("eat");   // should be blocked
+        Assert.Equal("faint", svc.CurrentState);
+    }
+
+    [Fact]
+    public void FaintLock_ClearsAfterAnimationComplete()
+    {
+        // faint has 2 frames at 4 fps → 0.5 s per cycle
+        var svc = Make();
         var pet = HealthyPet();
-        Assert.Equal("walk", AnimationService.ResolvePassiveState(pet, isMoving: true));
+        svc.TriggerFaint();
+        for (int i = 0; i < 40; i++)
+            svc.Tick(0.02, pet, isMoving: false);   // 0.8 s total
+        Assert.False(svc.IsFaintLocked);
     }
 
     [Fact]
-    public void ResolvePassiveState_AllHealthy_ReturnsIdle()
+    public void HungerFainted_ShowsFaintState()
     {
-        // Midday outside nap window, not forced awake, no inactivity
+        var svc = Make();
+        var pet = new PetState { IsHungerFainted = true, IsFainting = true };
+        svc.Tick(0.01, pet, isMoving: false);
+        Assert.Equal("faint", svc.CurrentState);
+    }
+
+    // ── Need prompts ──────────────────────────────────────────────────────────
+
+    [Fact]
+    public void NeedPrompt_HighHunger_TriggersHungryPrompt()
+    {
+        var svc = Make();
+        var pet = new PetState { Hunger = 50f };  // Stage1 (30–59)
+
+        // Run several ticks beyond Stage1PromptCooldownSec
+        double time = NeedConfig.Stage1PromptCooldownSec + 1.0;
+        svc.Tick(time, pet, isMoving: false);
+
+        Assert.Equal("hungry", svc.CurrentNeedPrompt);
+    }
+
+    [Fact]
+    public void NeedPrompt_Stage3_TriggersFrequently()
+    {
+        var svc = Make();
+        var pet = new PetState { Bored = 95f };  // Stage3
+
+        // Run ticks past Stage3 cooldown (30 sec)
+        double time = NeedConfig.Stage3PromptCooldownSec + 1.0;
+        svc.Tick(time, pet, isMoving: false);
+
+        Assert.Equal("bored", svc.CurrentNeedPrompt);
+    }
+
+    [Fact]
+    public void NeedPrompt_HighestSeverity_WinsWhenMultipleNeedsHigh()
+    {
+        var svc = Make();
+        // Dirty = stage3 (95), Hungry = stage1 (35) — dirty should win
+        var pet = new PetState { Dirty = 95f, Hunger = 35f };
+
+        double time = NeedConfig.Stage3PromptCooldownSec + 1.0;
+        svc.Tick(time, pet, isMoving: false);
+
+        Assert.Equal("dirty", svc.CurrentNeedPrompt);
+    }
+
+    [Fact]
+    public void NeedPrompt_DoesNotFireDuringSleep()
+    {
+        var svc = Make();
+        var pet = new PetState { Hunger = 90f, IsSleeping = true };  // stage3 but sleeping
+
+        double time = NeedConfig.Stage3PromptCooldownSec + 1.0;
+        svc.Tick(time, pet, isMoving: false);
+
+        Assert.Null(svc.CurrentNeedPrompt);
+    }
+
+    [Fact]
+    public void NeedPrompt_DoesNotFireDuringSad()
+    {
+        var svc = Make();
+        // First activate sad
+        var pet = new PetState { Sad = 70f, Hunger = 90f };
+        svc.Tick(0.01, pet, isMoving: false);   // latch sad active
+
+        // Now run past prompt cooldown
+        double time = NeedConfig.Stage3PromptCooldownSec + 1.0;
+        svc.Tick(time, pet, isMoving: false);
+
+        Assert.Null(svc.CurrentNeedPrompt);
+    }
+
+    // ── Frame advancement ─────────────────────────────────────────────────────
+
+    [Fact]
+    public void Tick_ZeroDelta_DoesNotAdvanceFrame()
+    {
+        var svc = Make();
+        svc.Tick(0, HealthyPet(), isMoving: false);
+        Assert.Equal(0, svc.CurrentFrame);
+    }
+
+    [Fact]
+    public void Tick_AfterOneFrameInterval_AdvancesToFrame1()
+    {
+        // happy = 6 fps → interval ≈ 0.167 s
+        var svc = Make();
+        var pet = new PetState { Hunger = 5f, Tired = 5f, Dirty = 5f, Bored = 5f, Sad = 5f };
+        svc.Tick(0.20, pet, isMoving: false);   // just past one frame
+        Assert.Equal(1, svc.CurrentFrame);
+    }
+
+    [Fact]
+    public void Tick_WrapsFrameBackToZero()
+    {
+        var svc = Make();
         var pet = HealthyPet();
-        var noon = new DateTime(2025, 1, 1, 14, 30, 0);   // 14:30 — no sleep window
-        Assert.Equal("idle", AnimationService.ResolvePassiveState(pet, isMoving: false, localNow: noon));
+        svc.Tick(2.0, pet, isMoving: false);    // plenty of time to cycle
+        Assert.InRange(svc.CurrentFrame, 0, DefaultCounts["happy"] - 1);
     }
 
-    // ── Sleep state — real clock ──────────────────────────────────────────────
-
-    [Theory]
-    [InlineData(22)]   // 10 pm — night window starts
-    [InlineData(23)]
-    [InlineData(0)]
-    [InlineData(3)]
-    [InlineData(7)]    // still night
-    public void ResolvePassiveState_NightHour_ReturnsSleep(int hour)
+    [Fact]
+    public void StateSwitch_ResetsFrameToZero()
     {
+        var svc = Make();
         var pet = HealthyPet();
-        var t   = new DateTime(2025, 1, 1, hour, 0, 0);
-        Assert.Equal("sleep", AnimationService.ResolvePassiveState(pet, isMoving: false, localNow: t));
-    }
 
-    [Fact]
-    public void ResolvePassiveState_NoonNap_ReturnsSleep()
-    {
-        var pet  = HealthyPet();
-        var noon = new DateTime(2025, 1, 1, 12, 30, 0);
-        Assert.Equal("sleep", AnimationService.ResolvePassiveState(pet, isMoving: false, localNow: noon));
-    }
+        svc.Tick(0.01, pet, isMoving: true);    // walk
+        svc.Tick(0.30, pet, isMoving: true);    // advance frame
+        svc.Tick(0.01, pet, isMoving: false);   // switch to happy
 
-    [Fact]
-    public void ResolvePassiveState_AfternoonNap_ReturnsSleep()
-    {
-        var pet = HealthyPet();
-        var t   = new DateTime(2025, 1, 1, 16, 15, 0);
-        Assert.Equal("sleep", AnimationService.ResolvePassiveState(pet, isMoving: false, localNow: t));
-    }
-
-    [Fact]
-    public void ResolvePassiveState_ForcedAwake_OverridesSleepSchedule()
-    {
-        var pet   = HealthyPet();
-        var night = new DateTime(2025, 1, 1, 23, 0, 0);
-        // forcedAwake = true → should NOT return sleep
-        string result = AnimationService.ResolvePassiveState(
-            pet, isMoving: false, forcedAwake: true, localNow: night);
-        Assert.NotEqual("sleep", result);
-    }
-
-    [Fact]
-    public void ResolvePassiveState_ExtendedInactivity_ReturnsSleep()
-    {
-        var pet = HealthyPet();
-        // 2pm — no schedule window; but 20 min of inactivity should trigger sleep
-        var afternoon = new DateTime(2025, 1, 1, 14, 0, 0);
-        double twentyMinutes = 20 * 60;
-        Assert.Equal("sleep",
-            AnimationService.ResolvePassiveState(pet, isMoving: false,
-                inactivitySeconds: twentyMinutes, localNow: afternoon));
-    }
-
-    // ── Happy state ───────────────────────────────────────────────────────────
-
-    [Fact]
-    public void ResolvePassiveState_AllNeedsHigh_ReturnsHappy()
-    {
-        var pet = new PetState { Hunger = 80f, Hygiene = 80f, Fun = 80f, Knowledge = 80f };
-        // 2pm — outside all sleep windows
-        var afternoon = new DateTime(2025, 1, 1, 14, 0, 0);
-        Assert.Equal("happy",
-            AnimationService.ResolvePassiveState(pet, isMoving: false, localNow: afternoon));
-    }
-
-    [Fact]
-    public void ResolvePassiveState_OneNeedBelowHappyThreshold_DoesNotReturnHappy()
-    {
-        var pet = new PetState { Hunger = 60f, Hygiene = 80f, Fun = 80f, Knowledge = 80f };
-        var afternoon = new DateTime(2025, 1, 1, 14, 0, 0);
-        string result = AnimationService.ResolvePassiveState(pet, isMoving: false, localNow: afternoon);
-        Assert.NotEqual("happy", result);
+        Assert.Equal("happy", svc.CurrentState);
+        Assert.Equal(0, svc.CurrentFrame);
     }
 
     // ── WakeUp ────────────────────────────────────────────────────────────────
 
     [Fact]
-    public void WakeUp_DuringNight_StopsReturningSleeep()
+    public void WakeUp_ClearsNeedPrompt()
     {
-        // Simulate a night tick that would normally produce "sleep"
-        var svc = new AnimationService(DefaultCounts);
-        var pet = HealthyPet();
+        var svc = Make();
+        var pet = new PetState { Hunger = 90f };
+        svc.Tick(NeedConfig.Stage3PromptCooldownSec + 1.0, pet, isMoving: false);
+        Assert.NotNull(svc.CurrentNeedPrompt);
 
-        // The pet wakes up
-        svc.WakeUp(durationMinutes: 10);
-
-        // Even at a night hour the Tick should not switch to sleep
-        // (We can't inject clock into Tick, so we exercise WakeUp then just check state isn't sleep)
-        svc.Tick(0.01, pet, isMoving: false);
-        Assert.NotEqual("sleep", svc.CurrentState);
+        svc.WakeUp();
+        Assert.Null(svc.CurrentNeedPrompt);
     }
 }
