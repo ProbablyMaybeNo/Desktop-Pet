@@ -18,4 +18,17 @@
     <ProjectReference Include="..\HuffleDesktopPet.Core\HuffleDesktopPet.Core.csproj" />
   </ItemGroup>
 
+  <!--
+    Sprite frames: copied next to the exe so LoadSprites() can find them at runtime.
+    Drop processed PNGs into assets/sprites/ and they auto-include on next build.
+    CopyToPublishDirectory ensures they travel with dotnet publish output too.
+  -->
+  <ItemGroup>
+    <Content Include="..\..\assets\sprites\*.png">
+      <Link>assets\sprites\%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+  </ItemGroup>
+
 </Project>

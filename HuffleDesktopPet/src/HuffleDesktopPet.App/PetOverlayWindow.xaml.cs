@@ -1,7 +1,9 @@
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using HuffleDesktopPet.Core.Models;
 using HuffleDesktopPet.Core.Services;
@@ -18,20 +20,26 @@ namespace HuffleDesktopPet;
 /// Milestone C  — autonomous wandering via WanderService ✓
 /// Milestone D  — need decay + auto-save + tooltip ✓
 /// Milestone E  — interactions (Feed/Play/Clean/Study) + visual need states + startup toggle ✓
+/// Milestone F  — sprite animation layer, frame timer, directional flip ✓
 /// </summary>
 public partial class PetOverlayWindow : Window
 {
     // ── State ─────────────────────────────────────────────────────────────────
-    private PetState      _state   = new();
-    private WanderService _wander  = null!;
+    private PetState         _state     = new();
+    private WanderService    _wander    = null!;
+    private AnimationService? _animation;
+
+    // ── Sprite frames ─────────────────────────────────────────────────────────
+    // state-name → ordered array of pre-loaded, frozen BitmapImages
+    private readonly Dictionary<string, BitmapImage[]> _spriteFrames = new();
 
     // ── Timers ────────────────────────────────────────────────────────────────
     private DispatcherTimer _wanderTimer = null!;   // ~30 fps
     private DispatcherTimer _needsTimer  = null!;   // every 60 s
 
     // ── Tray ──────────────────────────────────────────────────────────────────
-    private WinForms.NotifyIcon       _trayIcon          = null!;
-    private WinForms.ContextMenuStrip _trayMenu          = null!;
+    private WinForms.NotifyIcon        _trayIcon          = null!;
+    private WinForms.ContextMenuStrip  _trayMenu          = null!;
     private WinForms.ToolStripMenuItem _trayItemClickThrough = null!;
     private WinForms.ToolStripMenuItem _trayItemStartup      = null!;
 
@@ -45,7 +53,7 @@ public partial class PetOverlayWindow : Window
     private const int WS_EX_LAYERED     = 0x00080000;
     private const int WS_EX_TRANSPARENT = 0x00000020;
 
-    // ── Body fill colours ─────────────────────────────────────────────────────
+    // ── Body fill colours (placeholder ellipse) ───────────────────────────────
     private static readonly SolidColorBrush BrushNormal   = new(Color.FromArgb(0xCC, 0x7B, 0x5E, 0xA6));
     private static readonly SolidColorBrush BrushWarning  = new(Color.FromArgb(0xCC, 0xCC, 0x88, 0x33));
     private static readonly SolidColorBrush BrushCritical = new(Color.FromArgb(0xCC, 0xCC, 0x44, 0x33));
@@ -65,27 +73,22 @@ public partial class PetOverlayWindow : Window
     {
         base.OnContentRendered(e);
 
-        // Load persisted state and catch up any time-away decay
         _state = await PetPersistence.LoadAsync();
         PetEngine.Tick(_state, DateTime.UtcNow);
 
-        // Derive wander bounds from primary work area (minus pet window size)
         var area = SystemParameters.WorkArea;
         double maxX = area.Right  - Width;
         double maxY = area.Bottom - Height;
 
-        // Restore saved position (fractional → pixel)
-        double startX = _state.PositionX * maxX;
-        double startY = _state.PositionY * maxY;
-
         _wander = new WanderService(
-            startX, startY,
+            _state.PositionX * maxX, _state.PositionY * maxY,
             minX: area.Left, minY: area.Top,
             maxX: maxX,      maxY: maxY);
 
         Left = _wander.X;
         Top  = _wander.Y;
 
+        LoadSprites();
         StartTimers();
         RefreshPetAppearance();
     }
@@ -95,7 +98,6 @@ public partial class PetOverlayWindow : Window
         StopTimers();
         DisposeTray();
 
-        // Persist fractional position
         var area = SystemParameters.WorkArea;
         double maxX = Math.Max(1, area.Right  - Width);
         double maxY = Math.Max(1, area.Bottom - Height);
@@ -107,19 +109,94 @@ public partial class PetOverlayWindow : Window
         Application.Current.Shutdown();
     }
 
+    // ── Sprite loading ────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Scans assets/sprites/ next to the exe for huffle_{state}_{nn}.png files.
+    /// Loads all found frames into memory and activates the sprite Image element.
+    /// Falls back silently to the placeholder ellipse if no sprites are present.
+    /// </summary>
+    private void LoadSprites()
+    {
+        string exeDir     = Path.GetDirectoryName(Environment.ProcessPath ?? "") ?? "";
+        string spritesDir = Path.Combine(exeDir, "assets", "sprites");
+
+        if (!Directory.Exists(spritesDir)) return;
+
+        string[] states =
+        [
+            "walk", "idle", "eat", "clean",
+            "hungry", "bored", "dirty", "sad", "happy"
+        ];
+
+        var frameCounts = new Dictionary<string, int>();
+
+        foreach (string state in states)
+        {
+            var frames = new List<BitmapImage>();
+            for (int i = 1; ; i++)
+            {
+                string path = Path.Combine(spritesDir, $"huffle_{state}_{i:D2}.png");
+                if (!File.Exists(path)) break;
+
+                try
+                {
+                    var bmp = new BitmapImage();
+                    bmp.BeginInit();
+                    bmp.UriSource        = new Uri(path);
+                    bmp.CacheOption      = BitmapCacheOption.OnLoad; // release file handle
+                    bmp.DecodePixelWidth = 128;                       // 2x upscale at decode time
+                    bmp.EndInit();
+                    bmp.Freeze();   // immutable → safe to share across render passes
+
+                    frames.Add(bmp);
+                }
+                catch
+                {
+                    // Corrupt or unreadable frame — skip it
+                }
+            }
+
+            if (frames.Count > 0)
+            {
+                _spriteFrames[state] = [.. frames];
+                frameCounts[state]   = frames.Count;
+            }
+        }
+
+        if (frameCounts.Count == 0) return;
+
+        _animation = new AnimationService(frameCounts);
+
+        // Switch UI from placeholder to sprite
+        PetSprite.Visibility      = Visibility.Visible;
+        PlaceholderGrid.Visibility = Visibility.Collapsed;
+
+        // Display first frame immediately
+        UpdateSpriteFrame();
+    }
+
+    /// <summary>Pushes the current animation frame to the Image element.</summary>
+    private void UpdateSpriteFrame()
+    {
+        if (_animation is null) return;
+        if (!_spriteFrames.TryGetValue(_animation.CurrentState, out var frames)) return;
+
+        int idx = Math.Min(_animation.CurrentFrame, frames.Length - 1);
+        PetSprite.Source = frames[idx];
+    }
+
     // ── Timers ────────────────────────────────────────────────────────────────
 
     private void StartTimers()
     {
-        // Wander timer — ~33 ms ≈ 30 fps
         _wanderTimer = new DispatcherTimer(DispatcherPriority.Background)
         {
-            Interval = TimeSpan.FromMilliseconds(33)
+            Interval = TimeSpan.FromMilliseconds(33)   // ~30 fps
         };
         _wanderTimer.Tick += OnWanderTick;
         _wanderTimer.Start();
 
-        // Needs/save timer — every 60 seconds
         _needsTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(60) };
         _needsTimer.Tick += OnNeedsTick;
         _needsTimer.Start();
@@ -135,13 +212,21 @@ public partial class PetOverlayWindow : Window
 
     private void OnWanderTick(object? sender, EventArgs e)
     {
-        var now      = DateTime.UtcNow;
+        var    now   = DateTime.UtcNow;
         double delta = (now - _lastWanderTick).TotalSeconds;
         _lastWanderTick = now;
 
         _wander.Tick(delta);
         Left = _wander.X;
         Top  = _wander.Y;
+
+        // Animation — advance frame and apply directional flip
+        if (_animation is not null)
+        {
+            _animation.Tick(delta, _state, isMoving: !_wander.IsIdle);
+            UpdateSpriteFrame();
+            SpriteFlip.ScaleX = _wander.FacingLeft ? -1 : 1;
+        }
     }
 
     private void OnNeedsTick(object? sender, EventArgs e)
@@ -154,10 +239,9 @@ public partial class PetOverlayWindow : Window
     // ── Visual state ──────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Updates body colour, expression, and tooltip to reflect the current need levels.
-    /// Normal (all > 40): purple + smile.
-    /// Warning (any between 20–40): orange + smile.
-    /// Critical (any below 20): red + frown.
+    /// Updates placeholder body colour + expression, and the hover tooltip.
+    /// When sprites are loaded the placeholder is hidden, but we still update
+    /// it so the fallback is always in sync.
     /// </summary>
     private void RefreshPetAppearance()
     {
@@ -197,16 +281,28 @@ public partial class PetOverlayWindow : Window
     {
         switch (action)
         {
-            case Interaction.Feed:  PetEngine.Feed(_state);  break;
-            case Interaction.Play:  PetEngine.Play(_state);  break;
-            case Interaction.Clean: PetEngine.Clean(_state); break;
-            case Interaction.Study: PetEngine.Study(_state); break;
+            case Interaction.Feed:
+                PetEngine.Feed(_state);
+                _animation?.TriggerTransient("eat");
+                break;
+            case Interaction.Play:
+                PetEngine.Play(_state);
+                // play animation pending revised sprite sheet
+                break;
+            case Interaction.Clean:
+                PetEngine.Clean(_state);
+                _animation?.TriggerTransient("clean");
+                break;
+            case Interaction.Study:
+                PetEngine.Study(_state);
+                break;
         }
+
         RefreshPetAppearance();
         _ = PetPersistence.SaveAsync(_state);
     }
 
-    // XAML context menu click handlers
+    // XAML ContextMenu handlers
     private void OnFeedClick(object  sender, RoutedEventArgs e) => OnInteract(Interaction.Feed);
     private void OnPlayClick(object  sender, RoutedEventArgs e) => OnInteract(Interaction.Play);
     private void OnCleanClick(object sender, RoutedEventArgs e) => OnInteract(Interaction.Clean);
@@ -245,7 +341,6 @@ public partial class PetOverlayWindow : Window
         _trayIcon.DoubleClick += OnTrayToggleVisibility;
     }
 
-    /// <summary>Generates a tiny purple circle icon in memory — no .ico file required.</summary>
     private static Drawing.Icon MakePlaceholderIcon()
     {
         using var bmp = new Drawing.Bitmap(16, 16);
