@@ -1,197 +1,245 @@
+using System.Globalization;
 using HuffleDesktopPet.Core.Models;
 
 namespace HuffleDesktopPet.Core.Services;
 
-/// <summary>
-/// Frame-level animation state machine for the desktop pet.
-/// Determines which animation is active and which frame to display.
-/// No WPF dependency — fully unit-testable.
-///
-/// Priority order:
-///   1. Transient (eat / clean / study / faint — plays once, then reverts)
-///   2. Walk (while moving)
-///   3. Sad  (any need below critical threshold)
-///   4. Hungry / Dirty / Bored (whichever need is lowest)
-///   5. Sleep (scheduled night/nap windows, or extended inactivity — unless woken)
-///   6. Happy (all needs > 70 %)
-///   7. Idle (default)
-/// </summary>
 public sealed class AnimationService
 {
-    // ── Thresholds ────────────────────────────────────────────────────────────
     private const float CriticalThreshold = 20f;
-    private const float WarningThreshold  = 30f;
-    private const float HappyThreshold    = 70f;
-
-    /// <summary>Minutes of no movement before the pet nods off outside schedule.</summary>
+    private const float WarningThreshold = 30f;
+    private const float HappyThreshold = 70f;
     private const double InactivitySleepMinutes = 15.0;
 
-    // ── FPS per animation state ───────────────────────────────────────────────
-    private static double GetFps(string state) => state switch
+    private static readonly Dictionary<string, StateTiming> StateTimings = new(StringComparer.OrdinalIgnoreCase)
     {
-        "walk"        => 8.0,
-        "idle"        => 3.0,
-        "eat"         => 5.0,
-        "clean"       => 5.0,
-        "study"       => 4.0,
-        "sleep"       => 1.5,   // slow breathing loop
-        "faint"       => 4.0,
-        "celebrating" => 7.0,
-        "happy"       => 6.0,
-        _             => 3.0,   // hungry / bored / dirty / sad / cautious / booing
+        ["idle"] = new(TimeSpan.FromSeconds(1.0), canInterrupt: true),
+        ["walk"] = new(TimeSpan.FromSeconds(0.25), canInterrupt: true),
+        ["hungry"] = new(TimeSpan.FromSeconds(2.0), canInterrupt: true),
+        ["dirty"] = new(TimeSpan.FromSeconds(2.0), canInterrupt: true),
+        ["bored"] = new(TimeSpan.FromSeconds(2.0), canInterrupt: true),
+        ["sad"] = new(TimeSpan.FromSeconds(3.0), canInterrupt: true),
+        ["sleep"] = new(TimeSpan.FromSeconds(5.0), canInterrupt: true),
+        ["happy"] = new(TimeSpan.FromSeconds(2.0), canInterrupt: true),
     };
 
-    // ── Internal state ────────────────────────────────────────────────────────
+    private static double GetFps(string state) => state switch
+    {
+        "walk" => 8.0,
+        "idle" => 3.0,
+        "eat" => 5.0,
+        "clean" => 5.0,
+        "study" => 4.0,
+        "sleep" => 1.5,
+        "faint" => 4.0,
+        "celebrating" => 7.0,
+        "happy" => 6.0,
+        _ => 3.0,
+    };
+
     private readonly Dictionary<string, int> _frameCounts;
-    private string?  _transientState;
-    private double   _elapsed;
-    private double   _inactivitySeconds;
-    private DateTime _wokenUntil = DateTime.MinValue;   // forced-awake deadline
+    private readonly Func<DateTime> _clock;
+    private readonly Random _random;
+    private readonly string _logPath;
 
-    // ── Public state ──────────────────────────────────────────────────────────
+    private string? _transientState;
+    private double _elapsed;
+    private double _inactivitySeconds;
+    private DateTime _wokenUntil = DateTime.MinValue;
+    private DateTime _enteredAt;
+    private DateTime _lastIdleFlavorChange = DateTime.MinValue;
 
-    /// <summary>Name of the animation currently playing (e.g. "walk", "idle", "eat").</summary>
     public string CurrentState { get; private set; } = "idle";
-
-    /// <summary>Zero-based index of the frame to display within <see cref="CurrentState"/>.</summary>
-    public int CurrentFrame { get; private set; } = 0;
-
-    /// <summary>True while a transient (one-shot) animation is still playing.</summary>
+    public int CurrentFrame { get; private set; }
     public bool IsPlayingTransient => _transientState is not null;
+    public string LastTransitionReason { get; private set; } = "initial";
 
-    // ── Constructor ───────────────────────────────────────────────────────────
-
-    /// <param name="frameCounts">
-    /// Dictionary mapping animation state name → number of frames.
-    /// States not present here are treated as single-frame.
-    /// </param>
-    public AnimationService(IReadOnlyDictionary<string, int> frameCounts)
+    public AnimationService(
+        IReadOnlyDictionary<string, int> frameCounts,
+        Func<DateTime>? clock = null,
+        Random? random = null,
+        string? transitionLogPath = null)
     {
         _frameCounts = new Dictionary<string, int>(frameCounts);
+        _clock = clock ?? (() => DateTime.Now);
+        _random = random ?? new Random();
+        _logPath = transitionLogPath ?? Path.Combine(AppContext.BaseDirectory, "tools", "artifacts", "logs", "sprite_state.log");
+        _enteredAt = _clock();
     }
 
-    // ── API ───────────────────────────────────────────────────────────────────
-
-    /// <summary>
-    /// Trigger a one-shot animation (e.g. "eat", "clean").
-    /// The animation plays to completion; the state machine then reverts automatically.
-    /// No-op if <paramref name="state"/> is not in the frame-count dictionary.
-    /// </summary>
     public void TriggerTransient(string state)
     {
         if (!_frameCounts.ContainsKey(state)) return;
 
         _transientState = state;
-        CurrentState    = state;
-        CurrentFrame    = 0;
-        _elapsed        = 0;
+        TransitionTo(state, $"transient:{state}", force: true);
     }
 
-    /// <summary>
-    /// Wake the pet up for <paramref name="durationMinutes"/> minutes,
-    /// overriding any scheduled sleep window.  Call this when the user
-    /// interacts with the pet while it is sleeping.
-    /// </summary>
     public void WakeUp(double durationMinutes = 5.0)
     {
         _inactivitySeconds = 0;
-        _wokenUntil = DateTime.Now.AddMinutes(durationMinutes);
+        _wokenUntil = _clock().AddMinutes(durationMinutes);
     }
 
-    /// <summary>
-    /// Advance the animation by <paramref name="deltaSeconds"/>.
-    /// Call once per render tick (~30 fps from the wander timer).
-    /// </summary>
-    /// <param name="deltaSeconds">Seconds elapsed since last call.</param>
-    /// <param name="petState">Current pet needs, used to pick passive animation.</param>
-    /// <param name="isMoving">True when the pet is actively walking toward a target.</param>
     public void Tick(double deltaSeconds, PetState petState, bool isMoving)
     {
         if (deltaSeconds <= 0) return;
 
-        // Track inactivity: reset whenever the pet is moving or a transient fires
         if (isMoving || _transientState is not null)
             _inactivitySeconds = 0;
         else
             _inactivitySeconds += deltaSeconds;
 
-        // If not in a transient, switch to whatever the passive state should be
         if (_transientState is null)
         {
-            bool forcedAwake = DateTime.Now < _wokenUntil;
-            string target = ResolvePassiveState(petState, isMoving, _inactivitySeconds, forcedAwake);
-            if (CurrentState != target)
+            bool forcedAwake = _clock() < _wokenUntil;
+            var decision = ResolvePassiveDecision(petState, isMoving, _inactivitySeconds, forcedAwake, _clock(), _random, _lastIdleFlavorChange);
+            if (decision.State != CurrentState && CanLeaveCurrentState(decision.Priority))
             {
-                CurrentState = target;
-                CurrentFrame = 0;
-                _elapsed     = 0;
+                TransitionTo(decision.State, decision.Reason, force: false);
+                if (decision.State is "cautious" or "booing")
+                    _lastIdleFlavorChange = _clock();
             }
         }
 
-        // Advance frame timer
+        AdvanceFrame(deltaSeconds);
+    }
+
+    private void AdvanceFrame(double deltaSeconds)
+    {
         double frameInterval = 1.0 / GetFps(CurrentState);
         _elapsed += deltaSeconds;
 
-        if (_elapsed >= frameInterval)
-        {
-            _elapsed -= frameInterval;
+        if (_elapsed < frameInterval) return;
 
-            int frameCount = FrameCount(CurrentState);
-            CurrentFrame = (CurrentFrame + 1) % frameCount;
+        _elapsed -= frameInterval;
+        int frameCount = FrameCount(CurrentState);
+        CurrentFrame = (CurrentFrame + 1) % frameCount;
 
-            // Transient finishes when it wraps back to frame 0
-            if (_transientState is not null && CurrentFrame == 0)
-                _transientState = null;
-        }
+        if (_transientState is not null && CurrentFrame == 0)
+            _transientState = null;
     }
 
-    // ── Helpers ───────────────────────────────────────────────────────────────
+    private bool CanLeaveCurrentState(int nextPriority)
+    {
+        var now = _clock();
+        var timing = GetTiming(CurrentState);
+        if ((now - _enteredAt) < timing.MinDuration)
+            return false;
+
+        if (!timing.CanInterrupt && nextPriority <= GetPriority(CurrentState))
+            return false;
+
+        return true;
+    }
+
+    private void TransitionTo(string target, string reason, bool force)
+    {
+        if (!force && target == CurrentState)
+            return;
+
+        string from = CurrentState;
+        CurrentState = target;
+        CurrentFrame = 0;
+        _elapsed = 0;
+        _enteredAt = _clock();
+        LastTransitionReason = reason;
+        LogTransition(from, target, reason);
+    }
+
+    private void LogTransition(string fromState, string toState, string reason)
+    {
+        try
+        {
+            string? dir = Path.GetDirectoryName(_logPath);
+            if (!string.IsNullOrWhiteSpace(dir)) Directory.CreateDirectory(dir);
+            string line = string.Create(CultureInfo.InvariantCulture, $"{_clock():O}\t{fromState}\t{toState}\t{reason}{Environment.NewLine}");
+            File.AppendAllText(_logPath, line);
+        }
+        catch
+        {
+        }
+    }
 
     private int FrameCount(string state) =>
         _frameCounts.TryGetValue(state, out int n) ? Math.Max(1, n) : 1;
 
-    /// <summary>
-    /// Determines the appropriate passive animation state.
-    /// Sleep schedule: 22:00 – 08:00 (night), 12:00 – 13:00 (noon nap), 16:00 – 17:00 (afternoon nap).
-    /// Extended inactivity (≥ 15 min) also triggers sleep when not forced awake.
-    /// </summary>
+    private static StateTiming GetTiming(string state) =>
+        StateTimings.TryGetValue(state, out var timing) ? timing : new(TimeSpan.FromSeconds(0.5), canInterrupt: true);
+
+    private static int GetPriority(string state) => state switch
+    {
+        "eat" or "clean" or "study" or "faint" or "celebrating" => 100,
+        "walk" => 80,
+        "sad" => 70,
+        "hungry" or "dirty" or "bored" => 60,
+        "sleep" => 50,
+        "happy" => 40,
+        "idle" or "cautious" or "booing" => 30,
+        _ => 10,
+    };
+
     internal static string ResolvePassiveState(
         PetState state,
         bool isMoving,
         double inactivitySeconds = 0,
         bool forcedAwake = false,
-        DateTime? localNow = null)
+        DateTime? localNow = null,
+        Random? random = null,
+        DateTime? lastIdleFlavorChange = null)
+        => ResolvePassiveDecision(
+            state,
+            isMoving,
+            inactivitySeconds,
+            forcedAwake,
+            localNow ?? DateTime.Now,
+            random ?? new Random(0),
+            lastIdleFlavorChange ?? DateTime.MinValue).State;
+
+    internal static TransitionDecision ResolvePassiveDecision(
+        PetState state,
+        bool isMoving,
+        double inactivitySeconds,
+        bool forcedAwake,
+        DateTime now,
+        Random random,
+        DateTime lastIdleFlavorChange)
     {
-        if (isMoving) return "walk";
+        if (isMoving)
+            return new("walk", "motion", 80);
 
         float minNeed = Math.Min(Math.Min(state.Hunger, state.Hygiene), state.Fun);
 
-        if (minNeed < CriticalThreshold) return "sad";
-        if (state.Hunger  < WarningThreshold) return "hungry";
-        if (state.Hygiene < WarningThreshold) return "dirty";
-        if (state.Fun     < WarningThreshold) return "bored";
+        if (minNeed < CriticalThreshold)
+            return new("sad", "critical_need", 70);
+        if (state.Hunger < WarningThreshold)
+            return new("hungry", "low_hunger", 60);
+        if (state.Hygiene < WarningThreshold)
+            return new("dirty", "low_hygiene", 60);
+        if (state.Fun < WarningThreshold)
+            return new("bored", "low_fun", 60);
 
-        // Sleep check (skipped when user has manually woken the pet)
         if (!forcedAwake)
         {
-            var now  = localNow ?? DateTime.Now;
             int hour = now.Hour;
-            bool isScheduledSleep =
-                hour >= 22 || hour < 8 ||          // night: 22:00 – 08:00
-                (hour == 12) ||                     // noon nap: 12:00 – 13:00
-                (hour == 16);                       // afternoon nap: 16:00 – 17:00
+            bool isScheduledSleep = hour >= 22 || hour < 8 || hour == 12 || hour == 16;
             bool isInactiveTooLong = inactivitySeconds >= InactivitySleepMinutes * 60;
-
-            if (isScheduledSleep || isInactiveTooLong) return "sleep";
+            if (isScheduledSleep || isInactiveTooLong)
+                return new("sleep", isScheduledSleep ? "schedule_sleep" : "inactivity_sleep", 50);
         }
 
-        // Happy — all needs comfortably high
-        if (minNeed > HappyThreshold &&
-            state.Hunger  > HappyThreshold &&
-            state.Hygiene > HappyThreshold &&
-            state.Fun     > HappyThreshold)
-            return "happy";
+        if (state.Hunger > HappyThreshold && state.Hygiene > HappyThreshold && state.Fun > HappyThreshold)
+            return new("happy", "all_needs_high", 40);
 
-        return "idle";
+        if ((now - lastIdleFlavorChange) >= TimeSpan.FromSeconds(5))
+        {
+            int roll = random.Next(0, 20);
+            if (roll == 0) return new("cautious", "idle_flavor", 30);
+            if (roll == 1) return new("booing", "idle_flavor", 30);
+        }
+
+        return new("idle", "default_idle", 30);
     }
+
+    internal readonly record struct TransitionDecision(string State, string Reason, int Priority);
+    private readonly record struct StateTiming(TimeSpan MinDuration, bool CanInterrupt);
 }
