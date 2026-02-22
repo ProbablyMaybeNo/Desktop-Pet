@@ -91,5 +91,13 @@
             </Image.RenderTransform>
         </Image>
 
+        <!-- ═══ PARTICLE OVERLAY ════════════════════════════════════════════ -->
+        <!--
+            Code-behind populates this with Zzz (sleep) and heart (happy) TextBlocks.
+            IsHitTestVisible=False so clicks pass through to the pet sprite/drag logic.
+            Particles are positioned via Canvas.SetLeft/Top and fade via Opacity.
+        -->
+        <Canvas x:Name="ParticleCanvas" IsHitTestVisible="False"/>
+
     </Grid>
 </Window>

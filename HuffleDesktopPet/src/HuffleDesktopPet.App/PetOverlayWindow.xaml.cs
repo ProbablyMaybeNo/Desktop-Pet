@@ -47,6 +47,27 @@ public partial class PetOverlayWindow : Window
     private WinForms.ToolStripMenuItem _trayItemClickThrough = null!;
     private WinForms.ToolStripMenuItem _trayItemStartup      = null!;
 
+    // ── Particle system ───────────────────────────────────────────────────────
+    private sealed class Particle
+    {
+        public readonly TextBlock      Text;
+        public readonly ScaleTransform Scale = new(1, 1);
+        public double Phase;   // 0.0–1.0 position within one animation cycle
+
+        public Particle(TextBlock tb, double initialPhase)
+        {
+            Text                       = tb;
+            Phase                      = initialPhase;
+            tb.RenderTransform         = Scale;
+            tb.RenderTransformOrigin   = new Point(0.5, 0.5);
+            tb.IsHitTestVisible        = false;
+            tb.Opacity                 = 0;
+        }
+    }
+
+    private readonly List<Particle> _zzzParticles   = new();
+    private readonly List<Particle> _heartParticles = new();
+
     // ── Click-through ─────────────────────────────────────────────────────────
     private bool _clickThrough = false;
 
@@ -95,6 +116,7 @@ public partial class PetOverlayWindow : Window
         Top  = _wander.Y;
 
         LoadSprites();
+        SetupParticles();
         StartTimers();
         RefreshPetAppearance();
     }
@@ -199,14 +221,131 @@ public partial class PetOverlayWindow : Window
         catch { /* keep placeholder icon */ }
     }
 
+    // Maps animation states that don't yet have sprites to a visual stand-in.
+    // Remove an entry once the real sprite sheet is added to assets/sprites/.
+    private static readonly Dictionary<string, string> SpriteFallbacks = new()
+    {
+        ["tired"] = "bored",   // droopy expression — close enough visually
+        ["poked"] = "happy",   // quick bright reaction
+    };
+
     private void UpdateSpriteFrame()
     {
         if (_animation is null) return;
-        if (!_spriteFrames.TryGetValue(_animation.CurrentState, out var frames)) return;
 
-        int idx = Math.Min(_animation.CurrentFrame, frames.Length - 1);
+        string state = _animation.CurrentState;
+        if (!_spriteFrames.TryGetValue(state, out var frames) &&
+            (!SpriteFallbacks.TryGetValue(state, out string? fb) ||
+             !_spriteFrames.TryGetValue(fb, out frames)))
+            return;
+
+        int idx = Math.Min(_animation.CurrentFrame, frames!.Length - 1);
         PetSprite.Source = frames[idx];
     }
+
+    // ── Particle system ───────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Creates the Zzz (sleep) and heart (happy) TextBlock particles and adds
+    /// them to the ParticleCanvas overlay.  Call once after the window renders.
+    /// </summary>
+    private void SetupParticles()
+    {
+        // ── Zzz — three Z's of growing size, staggered by 1/3 of cycle ──────
+        (string label, double size)[] zDefs = [("z", 7), ("Z", 10), ("Z", 13)];
+        for (int i = 0; i < zDefs.Length; i++)
+        {
+            var (label, size) = zDefs[i];
+            var tb = new TextBlock
+            {
+                Text       = label,
+                FontSize   = size,
+                FontWeight = FontWeights.Bold,
+                Foreground = new SolidColorBrush(Color.FromRgb(180, 200, 255)),
+            };
+            ParticleCanvas.Children.Add(tb);
+            _zzzParticles.Add(new Particle(tb, initialPhase: i / 3.0));
+        }
+
+        // ── Hearts — three hearts staggered by 1/3 of cycle ──────────────────
+        for (int i = 0; i < 3; i++)
+        {
+            var tb = new TextBlock
+            {
+                Text       = "♥",
+                FontSize   = 9,
+                Foreground = new SolidColorBrush(Color.FromRgb(255, 110, 140)),
+            };
+            ParticleCanvas.Children.Add(tb);
+            _heartParticles.Add(new Particle(tb, initialPhase: i / 3.0));
+        }
+    }
+
+    /// <summary>Advances and positions all particle groups each wander tick.</summary>
+    private void UpdateParticles(double delta)
+    {
+        string? state = _animation?.CurrentState;
+        TickZzzParticles(delta,   active: state == "sleep");
+        TickHeartParticles(delta, active: state == "happy");
+    }
+
+    /// <summary>
+    /// Zzz particles rise from near the pet's head (upper-right area) and drift
+    /// upward + rightward.  Sprites face right by default, so the Z's emerge
+    /// from that side; when flipped for left-facing movement they're mirrored
+    /// automatically by SpriteFlip on the Image, but the canvas is not flipped —
+    /// the Z's stay in their coded position (acceptable for a subtle effect).
+    /// </summary>
+    private void TickZzzParticles(double delta, bool active)
+    {
+        for (int i = 0; i < _zzzParticles.Count; i++)
+        {
+            var p = _zzzParticles[i];
+            if (!active) { p.Text.Opacity = 0; continue; }
+
+            p.Phase = (p.Phase + delta / 2.5) % 1.0;
+            double t = p.Phase;
+
+            // Start from above the head (right side), drift up and right
+            Canvas.SetLeft(p.Text, 68 + i * 5 + 10 * t);
+            Canvas.SetTop( p.Text, 30          - 25 * t);
+
+            p.Text.Opacity = FadeInOut(t, fadeInEnd: 0.15, fadeOutStart: 0.70);
+
+            double s = 0.60 + 0.40 * t;
+            p.Scale.ScaleX = s;
+            p.Scale.ScaleY = s;
+        }
+    }
+
+    /// <summary>Hearts float upward from the pet's center, spreading slightly.</summary>
+    private void TickHeartParticles(double delta, bool active)
+    {
+        for (int i = 0; i < _heartParticles.Count; i++)
+        {
+            var p = _heartParticles[i];
+            if (!active) { p.Text.Opacity = 0; continue; }
+
+            p.Phase = (p.Phase + delta / 2.0) % 1.0;
+            double t = p.Phase;
+
+            // Spread across the width, float straight up
+            Canvas.SetLeft(p.Text, 44 + i * 16);
+            Canvas.SetTop( p.Text, 28          - 24 * t);
+
+            p.Text.Opacity = FadeInOut(t, fadeInEnd: 0.15, fadeOutStart: 0.72);
+
+            double s = 0.75 + 0.35 * t;
+            p.Scale.ScaleX = s;
+            p.Scale.ScaleY = s;
+        }
+    }
+
+    /// <summary>Ramps opacity 0→1 during [0, fadeInEnd], holds 1, then fades 1→0 during [fadeOutStart, 1].</summary>
+    private static double FadeInOut(double t, double fadeInEnd, double fadeOutStart) =>
+        t < fadeInEnd    ? t / fadeInEnd :
+        t > fadeOutStart ? (1.0 - t) / (1.0 - fadeOutStart) :
+                           1.0;
 
     // ── Timers ────────────────────────────────────────────────────────────────
 
@@ -254,6 +393,8 @@ public partial class PetOverlayWindow : Window
             UpdateSpriteFrame();
             SpriteFlip.ScaleX = _wander.FacingLeft ? -1 : 1;
         }
+
+        UpdateParticles(delta);
     }
 
     private void OnNeedsTick(object? sender, EventArgs e)
