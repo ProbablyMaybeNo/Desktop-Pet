@@ -107,6 +107,46 @@ Ongoing record of decisions, gotchas, and lessons learned.
 - Fire-and-forget `_ = PetPersistence.SaveAsync(...)` in the needs timer.
 - `OnClosed` awaits and also persists fractional window position.
 
-## Future entries
+---
 
-_(Add entries here as development progresses.)_
+## 2026-02-23 — Post-G audit fixes
+
+Full codebase audit conducted. Six issues identified and resolved.
+
+### Bug fixes
+
+**Bug 1 — Play interaction had no animation**
+- `OnInteract(Interaction.Play)` was calling `PetEngine.Play()` but had no `TriggerTransient()` call, leaving a comment as a placeholder.
+- Fix: call `TriggerTransient("play")` if `huffle_play_*.png` frames are present; otherwise fall back to `"celebrating"` so there is always visible feedback. The fallback requires zero code change when a real play sprite sheet is added — just drop the PNGs in `assets/sprites/`.
+- `"play"` added to `AnimationService.GetFps()` (7.0 fps) and to the `LoadSprites()` states array.
+
+**Bug 2 — Knowledge decay had no passive visual state**
+- Hunger → `hungry`, Hygiene → `dirty`, Fun → `bored` were all wired in `ResolvePassiveDecision`. Knowledge was tracked and persisted but never drove an animation.
+- Fix: added `if (state.Knowledge < WarningThreshold) return new("bored", "low_knowledge", 60)` after the Fun branch. `"bored"` is the closest semantic fit (pet is under-stimulated).
+
+**Bug 3 — AnimationService log defaulted to source-tree path**
+- Default `_logPath` was `AppContext.BaseDirectory/tools/artifacts/logs/sprite_state.log`. In a `dotnet publish` output the exe lives next to `assets/sprites/`, not inside the source tree; the `tools/` directory doesn't exist there. The `catch {}` swallowed the failure silently, dropping all logs.
+- Fix: default to `%AppData%\HuffleDesktopPet\logs\sprite_state.log` — same roaming-data location used by the save file.
+
+**Bug 4 — No single-instance guard**
+- Two concurrent instances both read/write `pet_state.json` via `File.Replace()`, creating a race that can corrupt the save. Two tray icons also appeared with no way to distinguish them.
+- Fix: acquire a named `Mutex` (`"HuffleDesktopPet_SingleInstance"`) in `App.OnStartup`. If `createdNew == false` show an informational `MessageBox` and call `Shutdown()`. Mutex released and disposed in `OnExit`.
+
+**Bug 5 — `WanderService.PixelsPerSecond` naming confusion**
+- The constant was labelled "pixels" but `Window.Left/Top` and `SystemParameters.WorkArea` are both in WPF device-independent units (DIPs). The math was correct; the name was misleading.
+- Fix: renamed to `SpeedDipsPerSecond`. No arithmetic change required.
+
+**Bug 6 — Raw sprite sheets included in build output**
+- The `*.png` glob in `App.csproj` captured the 8 raw GUID-named sheets in `assets/sprites/raw/`. They are not loaded at runtime (only `huffle_{state}_{nn}.png` files match the pattern in `LoadSprites`) but added unnecessary weight to every build output.
+- Fix: added `Exclude="..\..\assets\sprites\raw\*.png"` to the `Content` item.
+
+### New unit tests added
+
+| Test class | New tests |
+|---|---|
+| `AnimationServiceTests` | `TriggerTransient_SetsCurrentState`, `TriggerTransient_UnknownState_DoesNotTransition`, `TriggerTransient_ClearsAfterAllFramesAdvance`, `Sleep_ScheduledAt22h`, `Sleep_ScheduledAt07h`, `Sleep_ScheduledAt12h`, `Sleep_AtNormalHour_DoesNotTrigger`, `Sleep_InactivityOverThreshold`, `Sleep_ForcedAwake_OverridesSchedule`, `LowKnowledge_TriggersBored`, `LowKnowledge_Reason_IsLowKnowledge` |
+| `WanderServiceTests` | `SpeedDipsPerSecond_IsPositive`, `Tick_SpeedDoesNotExceedConstant` |
+
+### TESTING.md updated
+
+Added manual test checklists for Milestones E, F, and G (interactions, sprite animation, sleep/reactive states). Added a "Known limitations" section documenting single-monitor constraint, missing play sprite, scheduled naps, and lack of interaction cooldowns.

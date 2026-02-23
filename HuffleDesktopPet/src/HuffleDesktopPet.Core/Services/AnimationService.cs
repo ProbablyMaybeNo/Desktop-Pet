@@ -27,6 +27,7 @@ public sealed class AnimationService
         "walk" => 8.0,
         "idle" => 3.0,
         "eat" => 5.0,
+        "play" => 7.0,
         "clean" => 5.0,
         "study" => 4.0,
         "sleep" => 1.5,
@@ -62,7 +63,9 @@ public sealed class AnimationService
         _frameCounts = new Dictionary<string, int>(frameCounts);
         _clock = clock ?? (() => DateTime.Now);
         _random = random ?? new Random();
-        _logPath = transitionLogPath ?? Path.Combine(AppContext.BaseDirectory, "tools", "artifacts", "logs", "sprite_state.log");
+        _logPath = transitionLogPath ?? Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            "HuffleDesktopPet", "logs", "sprite_state.log");
         _enteredAt = _clock();
     }
 
@@ -217,6 +220,8 @@ public sealed class AnimationService
             return new("dirty", "low_hygiene", 60);
         if (state.Fun < WarningThreshold)
             return new("bored", "low_fun", 60);
+        if (state.Knowledge < WarningThreshold)
+            return new("bored", "low_knowledge", 60);
 
         if (!forcedAwake)
         {

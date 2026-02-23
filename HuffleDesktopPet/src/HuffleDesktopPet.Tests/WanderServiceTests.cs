@@ -130,4 +130,32 @@ public sealed class WanderServiceTests
         var svc = Make();
         Assert.False(svc.FacingLeft);
     }
+
+    // ── SpeedDipsPerSecond ────────────────────────────────────────────────
+
+    [Fact]
+    public void SpeedDipsPerSecond_IsPositive()
+    {
+        // Guard against accidental zero / negative which would freeze the pet
+        Assert.True(WanderService.SpeedDipsPerSecond > 0);
+    }
+
+    [Fact]
+    public void Tick_SpeedDoesNotExceedConstant()
+    {
+        // After initial idle, the pet moves. Verify it doesn't exceed the declared speed.
+        var svc = Make(x: 100, y: 100, seed: 7);
+        const double delta = 0.033;
+
+        // Burn off initial idle
+        svc.Tick(1.0);
+
+        double x0 = svc.X, y0 = svc.Y;
+        svc.Tick(delta);
+
+        double moved = Math.Sqrt(Math.Pow(svc.X - x0, 2) + Math.Pow(svc.Y - y0, 2));
+        double maxExpected = WanderService.SpeedDipsPerSecond * delta + 0.001; // small tolerance
+        Assert.True(moved <= maxExpected,
+            $"Moved {moved:F4} DIPs but max expected {maxExpected:F4}");
+    }
 }

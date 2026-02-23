@@ -24,7 +24,8 @@
     CopyToPublishDirectory ensures they travel with dotnet publish output too.
   -->
   <ItemGroup>
-    <Content Include="..\..\assets\sprites\*.png">
+    <Content Include="..\..\assets\sprites\*.png"
+             Exclude="..\..\assets\sprites\raw\*.png">
       <Link>assets\sprites\%(Filename)%(Extension)</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>

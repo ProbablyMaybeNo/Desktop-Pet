@@ -5,7 +5,7 @@ namespace HuffleDesktopPet.Core.Services;
 /// Works entirely in pixel space. No WPF dependency — unit-testable.
 ///
 /// Behaviour:
-///   - Pet drifts toward a random target at <see cref="PixelsPerSecond"/> px/s.
+///   - Pet drifts toward a random target at <see cref="SpeedDipsPerSecond"/> DIPs/s.
 ///   - On arrival it idles for a random duration, then picks a new target.
 ///   - All positions are clamped to the supplied bounds.
 /// </summary>
@@ -13,8 +13,12 @@ public sealed class WanderService
 {
     // ── Tuning constants ──────────────────────────────────────────────────────
 
-    /// <summary>Movement speed in pixels per second.</summary>
-    public const double PixelsPerSecond = 55.0;
+    /// <summary>
+    /// Movement speed in WPF device-independent units (DIPs) per second.
+    /// At 96 DPI one DIP == one physical pixel; at higher DPI scales this
+    /// keeps the on-screen velocity consistent regardless of display scaling.
+    /// </summary>
+    public const double SpeedDipsPerSecond = 55.0;
 
     /// <summary>Distance threshold (px) at which the pet is considered "arrived".</summary>
     private const double ArrivalThreshold = 6.0;
@@ -111,7 +115,7 @@ public sealed class WanderService
             return;
         }
 
-        double step = Math.Min(PixelsPerSecond * deltaSeconds, dist);
+        double step = Math.Min(SpeedDipsPerSecond * deltaSeconds, dist);
         FacingLeft = dx < 0;
         X += (dx / dist) * step;
         Y += (dy / dist) * step;

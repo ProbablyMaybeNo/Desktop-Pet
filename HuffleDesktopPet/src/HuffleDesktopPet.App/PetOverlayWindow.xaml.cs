@@ -134,7 +134,7 @@ public partial class PetOverlayWindow : Window
             // Need states
             "hungry", "bored", "dirty", "sad", "happy",
             // Interaction transients
-            "eat", "clean", "study",
+            "eat", "play", "clean", "study",
             // Bonus states (used when available)
             "sleep", "faint", "celebrating", "booing", "cautious",
         ];
@@ -345,7 +345,11 @@ public partial class PetOverlayWindow : Window
                 break;
             case Interaction.Play:
                 PetEngine.Play(_state);
-                // play animation pending revised sprite sheet
+                // Use "play" frames if present; fall back to "celebrating" so there
+                // is always visible feedback. Drop huffle_play_*.png into
+                // assets/sprites/ at any time and it is picked up automatically.
+                _animation?.TriggerTransient(
+                    _spriteFrames.ContainsKey("play") ? "play" : "celebrating");
                 break;
             case Interaction.Clean:
                 PetEngine.Clean(_state);

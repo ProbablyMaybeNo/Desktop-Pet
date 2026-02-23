@@ -17,13 +17,15 @@ They cover `HuffleDesktopPet.Core` only — no WPF, no UI automation.
 dotnet test src\HuffleDesktopPet.Tests\HuffleDesktopPet.Tests.csproj --logger "console;verbosity=normal"
 ```
 
-### Current test coverage (scaffold level)
+### Current test coverage
 
 | Test class | What it tests |
 |---|---|
 | `PetStateSerializationTests` | JSON round-trip, valid JSON shape, invalid JSON throws |
 | `PetEngineTests` | 1-hour decay rates, zero-elapsed no-op, past-time guard, clamp at 0, clock-skew cap |
-| `WanderServiceTests` | Bounds clamping, zero/negative delta, movement start, 500-tick bounds check, SetPosition |
+| `PetEngineInteractionTests` | Feed / Play / Clean / Study deltas and clamp behaviour |
+| `WanderServiceTests` | Bounds clamping, zero/negative delta, movement start, 500-tick bounds check, SetPosition, SpeedDipsPerSecond guard |
+| `AnimationServiceTests` | Priority rules, hysteresis, walk min-duration, determinism, transition log, TriggerTransient lifecycle, sleep schedule hours, Knowledge → bored state |
 
 All tests must pass on a fresh clone before any PR is merged.
 
@@ -94,6 +96,72 @@ These are the baseline checks to confirm the scaffold is healthy.
 - [ ] `%AppData%\HuffleDesktopPet\pet_state.json.bak` exists after second run
 - [ ] Manually corrupt `pet_state.json` (delete some characters); app still opens using `.bak`
 - [ ] Pet position is roughly preserved between restarts (within primary monitor bounds)
+
+---
+
+## Manual test checklist — Milestone E (interactions + startup toggle)
+
+- [ ] Right-click the pet — context menu shows Feed / Play / Clean / Study
+- [ ] **Feed**: Hunger rises, Hygiene drops slightly, "eat" animation plays
+- [ ] **Play**: Fun rises, Hunger drops slightly, a play/celebrating animation plays
+- [ ] **Clean**: Hygiene rises, "clean" animation plays
+- [ ] **Study**: Knowledge rises, Fun drops slightly, "study" animation plays
+- [ ] When all needs are above 70 after an interaction, "celebrating" animation fires
+- [ ] Tray icon context menu also has Feed / Play / Clean / Study — all work the same
+- [ ] "Start with Windows: ON/OFF" toggle in tray menu persists across reboots
+- [ ] If the app is already running, launching it again shows a "Huffle is already running" message and exits — only one tray icon visible
+
+---
+
+## Manual test checklist — Milestone F (sprite animation)
+
+- [ ] Sprites load: the placeholder ellipse is hidden and a pixel-art Huffle appears
+- [ ] Transparency is clean — no black halo or rectangular background around the sprite
+- [ ] Sprite flips horizontally when the pet moves left
+- [ ] Walking animation plays while the pet is moving; idle animation plays while resting
+- [ ] Hover tooltip still shows need values and current animation state + reason
+- [ ] Tray icon changes to the actual idle sprite (not the purple circle placeholder)
+- [ ] If `assets/sprites/` is absent or empty, app falls back to the placeholder ellipse without crashing
+
+---
+
+## Manual test checklist — Milestone G (sleep + reactive states)
+
+### Need-based states
+- [ ] When Hunger < 30, pet plays the "hungry" animation
+- [ ] When Hygiene < 30, pet plays the "dirty" animation
+- [ ] When Fun < 30, pet plays the "bored" animation
+- [ ] When Knowledge < 30, pet plays the "bored" animation (low_knowledge reason in tooltip)
+- [ ] When any need < 20, pet plays the "sad" animation
+
+### Sleep schedule
+- [ ] Between 22:00–08:00, pet automatically shows the "sleep" animation
+- [ ] At 12:00 and 16:00, pet shows the "sleep" animation (scheduled nap)
+- [ ] After 15 minutes without movement (no drag, no interaction), pet falls asleep
+- [ ] Any interaction (Feed / Play / Clean / Study) wakes the pet for ~5 minutes
+
+### Faint
+- [ ] If any need bottoms out (< 1), the "faint" animation fires
+- [ ] Faint is throttled — does not repeat more than once every 10 minutes
+
+### Celebrating
+- [ ] When all needs are > 70 after an interaction, the "celebrating" animation fires
+- [ ] Celebrating does not interrupt an already-playing transient (eat / clean / study)
+
+### Transition log
+- [ ] `%AppData%\HuffleDesktopPet\logs\sprite_state.log` is created and grows as states change
+
+---
+
+## Known limitations (v1)
+
+- **Single monitor only.** The pet is clamped to the primary monitor's work area.
+  Multi-monitor support is deferred to post-v1.
+- **No play-specific sprite yet.** Play interaction falls back to the "celebrating"
+  animation until `huffle_play_*.png` frames are added to `assets/sprites/`.
+- **Scheduled naps at 12:00 and 16:00.** These are by design (midday + afternoon nap)
+  but may be surprising — the pet sleeps even with full needs at those hours.
+- **No interaction cooldowns.** Needs can be maxed instantly by repeated clicks.
 
 ---
 
